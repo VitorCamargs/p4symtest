@@ -1,0 +1,131 @@
+{
+  "s1": {
+    "MyIngress.ipv4_lpm": [
+      {
+        "match": {
+          "ipv4.dstAddr": [
+            167772161,
+            32
+          ]
+        },
+        "action": "MyIngress.ipv4_forward",
+        "action_params": {
+          "port": 1,
+          "dstAddr": 257
+        }
+      },
+      {
+        "match": {
+          "ipv4.dstAddr": [
+            167772162,
+            32
+          ]
+        },
+        "action": "MyIngress.ipv4_forward",
+        "action_params": {
+          "port": 2,
+          "dstAddr": 514
+        }
+      },
+      {
+        "match": {
+          "ipv4.dstAddr": [
+            167772163,
+            32
+          ]
+        },
+        "action": "MyIngress.ipv4_forward",
+        "action_params": {
+          "port": 3,
+          "dstAddr": 771
+        }
+      }
+    ]
+  },
+  "s2": {
+    "MyIngress.ipv4_lpm": [
+      {
+        "match": {
+          "ipv4.dstAddr": [
+            167772161,
+            32
+          ]
+        },
+        "action": "MyIngress.ipv4_forward",
+        "action_params": {
+          "port": 2,
+          "dstAddr": 257
+        }
+      },
+      {
+        "match": {
+          "ipv4.dstAddr": [
+            167772162,
+            32
+          ]
+        },
+        "action": "MyIngress.ipv4_forward",
+        "action_params": {
+          "port": 1,
+          "dstAddr": 514
+        }
+      },
+      {
+        "match": {
+          "ipv4.dstAddr": [
+            167772163,
+            32
+          ]
+        },
+        "action": "MyIngress.ipv4_forward",
+        "action_params": {
+          "port": 3,
+          "dstAddr": 771
+        }
+      }
+    ]
+  },
+  "s3": {
+    "MyIngress.ipv4_lpm": [
+      {
+        "match": {
+          "ipv4.dstAddr": [
+            167772161,
+            32
+          ]
+        },
+        "action": "MyIngress.ipv4_forward",
+        "action_params": {
+          "port": 2,
+          "dstAddr": 257
+        }
+      },
+      {
+        "match": {
+          "ipv4.dstAddr": [
+            167772162,
+            32
+          ]
+        },
+        "action": "MyIngress.ipv4_forward",
+        "action_params": {
+          "port": 3,
+          "dstAddr": 514
+        }
+      },
+      {
+        "match": {
+          "ipv4.dstAddr": [
+            167772163,
+            32
+          ]
+        },
+        "action": "MyIngress.ipv4_forward",
+        "action_params": {
+          "port": 1,
+          "dstAddr": 771
+        }
+      }
+    ]
+  }
+}

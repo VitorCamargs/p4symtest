@@ -1,0 +1,33 @@
+# Comece da imagem p4c
+FROM p4lang/p4c:latest
+
+# Instale as dependências do sistema: python e a libboost ausente
+RUN apt-get update && \
+    apt-get install -y \
+        python3-pip \
+        libboost-iostreams1.71.0 \
+    && \
+    # Atualize o cache do linker
+    ldconfig && \
+    # Limpe o cache do apt para manter a imagem pequena
+    rm -rf /var/lib/apt/lists/*
+
+# Crie o diretório de trabalho
+WORKDIR /app
+
+# Instale as dependências Python
+# (Usamos os nomes do seu docker-compose)
+RUN pip3 install Flask flask-cors z3-solver networkx pydot
+
+# Copie seu aplicativo para o contêiner
+# O volume no docker-compose irá sobrepor isso,
+# mas é bom ter para consistência.
+COPY . .
+
+# Defina as variáveis de ambiente
+ENV FLASK_APP=app.py
+ENV FLASK_ENV=development
+ENV PYTHONUNBUFFERED=1
+
+# Comando para iniciar o servidor
+CMD ["python3", "app.py"]

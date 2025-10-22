@@ -1,0 +1,48 @@
+services:
+  # Backend Flask com p4c
+  backend:
+    build: ./backend  # <-- Diz ao compose para construir o Dockerfile em ./backend
+    container_name: p4symtest-backend
+    working_dir: /app
+    # O 'command' agora está dentro do Dockerfile (CMD)
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./backend:/app  # <-- Ainda montamos para live-reload do código
+      - ./backend/workspace:/app/workspace
+    # As ENVs agora vêm do Dockerfile, mas podem ser deixadas aqui também
+    networks:
+      - p4symtest-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/api/info/components"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Frontend React
+  frontend:
+    image: node:18-alpine
+    container_name: p4symtest-frontend
+    working_dir: /app
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    environment:
+      - VITE_API_URL=http://backend:5000/api
+    networks:
+      - p4symtest-network
+    depends_on:
+      - backend
+    stdin_open: true
+    tty: true
+
+networks:
+  p4symtest-network:
+    driver: bridge
+
+volumes:
+  node_modules:

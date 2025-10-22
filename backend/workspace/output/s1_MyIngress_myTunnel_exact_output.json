@@ -1,0 +1,97 @@
+[
+  {
+    "description": "start [extract ethernet] -> parse_myTunnel [extract myTunnel] -> parse_ipv4 [extract ipv4] -> MyIngress.myTunnel_exact",
+    "z3_constraints_smt2": [
+      "(= ethernet.etherType #x1212)",
+      "(= myTunnel.proto_id #x0800)",
+      "(= scalars.$valid$ #b0)",
+      "(= standard_metadata.$valid$ #b0)",
+      "(= ethernet.$valid$ #b1)",
+      "(= myTunnel.$valid$ #b1)",
+      "(= ipv4.$valid$ #b1)",
+      "(distinct #b111111111 #b111111111)"
+    ],
+    "present_headers": [
+      "ethernet",
+      "ipv4",
+      "myTunnel"
+    ],
+    "history": [
+      "Parser",
+      "MyIngress.myTunnel_exact"
+    ],
+    "field_updates": {
+      "standard_metadata.egress_spec": "#b111111111"
+    }
+  },
+  {
+    "description": "start [extract ethernet] -> parse_myTunnel [extract myTunnel] -> MyIngress.myTunnel_exact",
+    "z3_constraints_smt2": [
+      "(= ethernet.etherType #x1212)",
+      "(not (= myTunnel.proto_id #x0800))",
+      "(= scalars.$valid$ #b0)",
+      "(= standard_metadata.$valid$ #b0)",
+      "(= ethernet.$valid$ #b1)",
+      "(= myTunnel.$valid$ #b1)",
+      "(= ipv4.$valid$ #b0)",
+      "(distinct #b111111111 #b111111111)"
+    ],
+    "present_headers": [
+      "ethernet",
+      "myTunnel"
+    ],
+    "history": [
+      "Parser",
+      "MyIngress.myTunnel_exact"
+    ],
+    "field_updates": {
+      "standard_metadata.egress_spec": "#b111111111"
+    }
+  },
+  {
+    "description": "start [extract ethernet] -> parse_ipv4 [extract ipv4] -> MyIngress.myTunnel_exact",
+    "z3_constraints_smt2": [
+      "(= ethernet.etherType #x0800)",
+      "(= scalars.$valid$ #b0)",
+      "(= standard_metadata.$valid$ #b0)",
+      "(= ethernet.$valid$ #b1)",
+      "(= myTunnel.$valid$ #b0)",
+      "(= ipv4.$valid$ #b1)",
+      "(distinct #b111111111 #b111111111)"
+    ],
+    "present_headers": [
+      "ethernet",
+      "ipv4"
+    ],
+    "history": [
+      "Parser",
+      "MyIngress.myTunnel_exact"
+    ],
+    "field_updates": {
+      "standard_metadata.egress_spec": "#b111111111"
+    }
+  },
+  {
+    "description": "start [extract ethernet] -> MyIngress.myTunnel_exact",
+    "z3_constraints_smt2": [
+      "(not (= ethernet.etherType #x1212))",
+      "(not (= ethernet.etherType #x0800))",
+      "(= scalars.$valid$ #b0)",
+      "(= standard_metadata.$valid$ #b0)",
+      "(= ethernet.$valid$ #b1)",
+      "(= myTunnel.$valid$ #b0)",
+      "(= ipv4.$valid$ #b0)",
+      "(distinct #b111111111 #b111111111)"
+    ],
+    "present_headers": [
+      "ethernet"
+    ],
+    "history": [
+      "Parser",
+      "MyIngress.myTunnel_exact"
+    ],
+    "field_updates": {
+      "standard_metadata.egress_spec": "#b111111111"
+    }
+  }
+]
