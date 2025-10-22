@@ -1,0 +1,38 @@
+[
+  {
+    "input_state": "start [extract ethernet] -> parse_ipv4 [extract ipv4]",
+    "input_state_index": 0,
+    "emission_status": [
+      {
+        "header": "ethernet",
+        "status": "Sempre"
+      },
+      {
+        "header": "myTunnel",
+        "status": "Nunca"
+      },
+      {
+        "header": "ipv4",
+        "status": "Sempre"
+      }
+    ]
+  },
+  {
+    "input_state": "start [extract ethernet]",
+    "input_state_index": 1,
+    "emission_status": [
+      {
+        "header": "ethernet",
+        "status": "Sempre"
+      },
+      {
+        "header": "myTunnel",
+        "status": "Nunca"
+      },
+      {
+        "header": "ipv4",
+        "status": "Nunca"
+      }
+    ]
+  }
+]

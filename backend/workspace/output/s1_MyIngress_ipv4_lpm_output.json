@@ -1,15 +1,13 @@
 [
   {
-    "description": "start [extract ethernet] -> parse_myTunnel [extract myTunnel] -> parse_ipv4 [extract ipv4] -> MyIngress.ipv4_lpm",
+    "description": "start [extract ethernet] -> parse_myTunnel [extract myTunnel] -> parse_ipv4 [extract ipv4]",
     "z3_constraints_smt2": [
       "(= ethernet.etherType #x1212)",
       "(= myTunnel.proto_id #x0800)",
-      "(= scalars.$valid$ #b0)",
       "(= standard_metadata.$valid$ #b0)",
       "(= ethernet.$valid$ #b1)",
       "(= myTunnel.$valid$ #b1)",
-      "(= ipv4.$valid$ #b1)",
-      "(let ((a!1 (ite (and true (= (bvand ipv4.dstAddr #xffffffff) #x0a000003))\n                #b000000011\n                #b111111111)))\n(let ((a!2 (ite (and true (= (bvand ipv4.dstAddr #xffffffff) #x0a000002))\n                #b000000010\n                a!1)))\n(let ((a!3 (ite (and true (= (bvand ipv4.dstAddr #xffffffff) #x0a000001))\n                #b000000001\n                a!2)))\n  (distinct a!3 #b111111111))))"
+      "(= ipv4.$valid$ #b1)"
     ],
     "present_headers": [
       "ethernet",
@@ -17,53 +15,36 @@
       "myTunnel"
     ],
     "history": [
-      "Parser",
-      "MyIngress.ipv4_lpm"
-    ],
-    "field_updates": {
-      "standard_metadata.egress_spec": "(let ((a!1 (ite (and true (= (bvand ipv4.dstAddr #xffffffff) #x0a000003))\n                #b000000011\n                #b111111111)))\n(let ((a!2 (ite (and true (= (bvand ipv4.dstAddr #xffffffff) #x0a000002))\n                #b000000010\n                a!1)))\n  (ite (and true (= (bvand ipv4.dstAddr #xffffffff) #x0a000001))\n       #b000000001\n       a!2)))",
-      "ethernet.dstAddr": "(let ((a!1 (ite (and true (= (bvand ipv4.dstAddr #xffffffff) #x0a000003))\n                #x000000000303\n                ethernet.dstAddr)))\n(let ((a!2 (ite (and true (= (bvand ipv4.dstAddr #xffffffff) #x0a000002))\n                #x000000000202\n                a!1)))\n  (ite (and true (= (bvand ipv4.dstAddr #xffffffff) #x0a000001))\n       #x000000000101\n       a!2)))",
-      "ethernet.srcAddr": "(let ((a!1 (ite (and true (= (bvand ipv4.dstAddr #xffffffff) #x0a000003))\n                ethernet.dstAddr\n                ethernet.srcAddr)))\n(let ((a!2 (ite (and true (= (bvand ipv4.dstAddr #xffffffff) #x0a000002))\n                ethernet.dstAddr\n                a!1)))\n  (ite (and true (= (bvand ipv4.dstAddr #xffffffff) #x0a000001))\n       ethernet.dstAddr\n       a!2)))",
-      "ipv4.ttl": "(let ((a!1 (ite (and true (= (bvand ipv4.dstAddr #xffffffff) #x0a000003))\n                (bvand (bvadd ipv4.ttl #xff) #xff)\n                ipv4.ttl)))\n(let ((a!2 (ite (and true (= (bvand ipv4.dstAddr #xffffffff) #x0a000002))\n                (bvand (bvadd ipv4.ttl #xff) #xff)\n                a!1)))\n  (ite (and true (= (bvand ipv4.dstAddr #xffffffff) #x0a000001))\n       (bvand (bvadd ipv4.ttl #xff) #xff)\n       a!2)))"
-    }
+      "Parser"
+    ]
   },
   {
-    "description": "start [extract ethernet] -> parse_myTunnel [extract myTunnel] -> MyIngress.ipv4_lpm",
+    "description": "start [extract ethernet] -> parse_myTunnel [extract myTunnel]",
     "z3_constraints_smt2": [
       "(= ethernet.etherType #x1212)",
       "(not (= myTunnel.proto_id #x0800))",
-      "(= scalars.$valid$ #b0)",
       "(= standard_metadata.$valid$ #b0)",
       "(= ethernet.$valid$ #b1)",
       "(= myTunnel.$valid$ #b1)",
-      "(= ipv4.$valid$ #b0)",
-      "(let ((a!1 (ite (and true (= (bvand ipv4.dstAddr #xffffffff) #x0a000003))\n                #b000000011\n                #b111111111)))\n(let ((a!2 (ite (and true (= (bvand ipv4.dstAddr #xffffffff) #x0a000002))\n                #b000000010\n                a!1)))\n(let ((a!3 (ite (and true (= (bvand ipv4.dstAddr #xffffffff) #x0a000001))\n                #b000000001\n                a!2)))\n  (distinct a!3 #b111111111))))"
+      "(= ipv4.$valid$ #b0)"
     ],
     "present_headers": [
       "ethernet",
       "myTunnel"
     ],
     "history": [
-      "Parser",
-      "MyIngress.ipv4_lpm"
-    ],
-    "field_updates": {
-      "standard_metadata.egress_spec": "(let ((a!1 (ite (and true (= (bvand ipv4.dstAddr #xffffffff) #x0a000003))\n                #b000000011\n                #b111111111)))\n(let ((a!2 (ite (and true (= (bvand ipv4.dstAddr #xffffffff) #x0a000002))\n                #b000000010\n                a!1)))\n  (ite (and true (= (bvand ipv4.dstAddr #xffffffff) #x0a000001))\n       #b000000001\n       a!2)))",
-      "ethernet.dstAddr": "(let ((a!1 (ite (and true (= (bvand ipv4.dstAddr #xffffffff) #x0a000003))\n                #x000000000303\n                ethernet.dstAddr)))\n(let ((a!2 (ite (and true (= (bvand ipv4.dstAddr #xffffffff) #x0a000002))\n                #x000000000202\n                a!1)))\n  (ite (and true (= (bvand ipv4.dstAddr #xffffffff) #x0a000001))\n       #x000000000101\n       a!2)))",
-      "ethernet.srcAddr": "(let ((a!1 (ite (and true (= (bvand ipv4.dstAddr #xffffffff) #x0a000003))\n                ethernet.dstAddr\n                ethernet.srcAddr)))\n(let ((a!2 (ite (and true (= (bvand ipv4.dstAddr #xffffffff) #x0a000002))\n                ethernet.dstAddr\n                a!1)))\n  (ite (and true (= (bvand ipv4.dstAddr #xffffffff) #x0a000001))\n       ethernet.dstAddr\n       a!2)))",
-      "ipv4.ttl": "(let ((a!1 (ite (and true (= (bvand ipv4.dstAddr #xffffffff) #x0a000003))\n                (bvand (bvadd ipv4.ttl #xff) #xff)\n                ipv4.ttl)))\n(let ((a!2 (ite (and true (= (bvand ipv4.dstAddr #xffffffff) #x0a000002))\n                (bvand (bvadd ipv4.ttl #xff) #xff)\n                a!1)))\n  (ite (and true (= (bvand ipv4.dstAddr #xffffffff) #x0a000001))\n       (bvand (bvadd ipv4.ttl #xff) #xff)\n       a!2)))"
-    }
+      "Parser"
+    ]
   },
   {
     "description": "start [extract ethernet] -> parse_ipv4 [extract ipv4] -> MyIngress.ipv4_lpm",
     "z3_constraints_smt2": [
       "(= ethernet.etherType #x0800)",
-      "(= scalars.$valid$ #b0)",
       "(= standard_metadata.$valid$ #b0)",
       "(= ethernet.$valid$ #b1)",
       "(= myTunnel.$valid$ #b0)",
       "(= ipv4.$valid$ #b1)",
-      "(let ((a!1 (ite (and true (= (bvand ipv4.dstAddr #xffffffff) #x0a000003))\n                #b000000011\n                #b111111111)))\n(let ((a!2 (ite (and true (= (bvand ipv4.dstAddr #xffffffff) #x0a000002))\n                #b000000010\n                a!1)))\n(let ((a!3 (ite (and true (= (bvand ipv4.dstAddr #xffffffff) #x0a000001))\n                #b000000001\n                a!2)))\n  (distinct a!3 #b111111111))))"
+      "(let ((a!1 (ite (= ipv4.dstAddr #x0a000001)\n                #b000000001\n                (ite (= ipv4.dstAddr #x0a000002)\n                     #b000000010\n                     (ite (= ipv4.dstAddr #x0a000003) #b000000011 #b111111111)))))\n  (distinct a!1 #b111111111))"
     ],
     "present_headers": [
       "ethernet",
@@ -74,36 +55,27 @@
       "MyIngress.ipv4_lpm"
     ],
     "field_updates": {
-      "standard_metadata.egress_spec": "(let ((a!1 (ite (and true (= (bvand ipv4.dstAddr #xffffffff) #x0a000003))\n                #b000000011\n                #b111111111)))\n(let ((a!2 (ite (and true (= (bvand ipv4.dstAddr #xffffffff) #x0a000002))\n                #b000000010\n                a!1)))\n  (ite (and true (= (bvand ipv4.dstAddr #xffffffff) #x0a000001))\n       #b000000001\n       a!2)))",
-      "ethernet.dstAddr": "(let ((a!1 (ite (and true (= (bvand ipv4.dstAddr #xffffffff) #x0a000003))\n                #x000000000303\n                ethernet.dstAddr)))\n(let ((a!2 (ite (and true (= (bvand ipv4.dstAddr #xffffffff) #x0a000002))\n                #x000000000202\n                a!1)))\n  (ite (and true (= (bvand ipv4.dstAddr #xffffffff) #x0a000001))\n       #x000000000101\n       a!2)))",
-      "ethernet.srcAddr": "(let ((a!1 (ite (and true (= (bvand ipv4.dstAddr #xffffffff) #x0a000003))\n                ethernet.dstAddr\n                ethernet.srcAddr)))\n(let ((a!2 (ite (and true (= (bvand ipv4.dstAddr #xffffffff) #x0a000002))\n                ethernet.dstAddr\n                a!1)))\n  (ite (and true (= (bvand ipv4.dstAddr #xffffffff) #x0a000001))\n       ethernet.dstAddr\n       a!2)))",
-      "ipv4.ttl": "(let ((a!1 (ite (and true (= (bvand ipv4.dstAddr #xffffffff) #x0a000003))\n                (bvand (bvadd ipv4.ttl #xff) #xff)\n                ipv4.ttl)))\n(let ((a!2 (ite (and true (= (bvand ipv4.dstAddr #xffffffff) #x0a000002))\n                (bvand (bvadd ipv4.ttl #xff) #xff)\n                a!1)))\n  (ite (and true (= (bvand ipv4.dstAddr #xffffffff) #x0a000001))\n       (bvand (bvadd ipv4.ttl #xff) #xff)\n       a!2)))"
+      "standard_metadata.egress_spec": "(ite (= ipv4.dstAddr #x0a000001)\n     #b000000001\n     (ite (= ipv4.dstAddr #x0a000002)\n          #b000000010\n          (ite (= ipv4.dstAddr #x0a000003) #b000000011 #b111111111)))",
+      "ethernet.dstAddr": "(ite (= ipv4.dstAddr #x0a000001)\n     #x000000000101\n     (ite (= ipv4.dstAddr #x0a000002)\n          #x000000000202\n          (ite (= ipv4.dstAddr #x0a000003) #x000000000303 ethernet.dstAddr)))",
+      "ethernet.srcAddr": "(ite (or (= ipv4.dstAddr #x0a000001)\n         (= ipv4.dstAddr #x0a000002)\n         (= ipv4.dstAddr #x0a000003))\n     ethernet.dstAddr\n     ethernet.srcAddr)",
+      "ipv4.ttl": "(ite (or (= ipv4.dstAddr #x0a000001)\n         (= ipv4.dstAddr #x0a000002)\n         (= ipv4.dstAddr #x0a000003))\n     (bvadd #xff ipv4.ttl)\n     ipv4.ttl)"
     }
   },
   {
-    "description": "start [extract ethernet] -> MyIngress.ipv4_lpm",
+    "description": "start [extract ethernet]",
     "z3_constraints_smt2": [
       "(not (= ethernet.etherType #x1212))",
       "(not (= ethernet.etherType #x0800))",
-      "(= scalars.$valid$ #b0)",
       "(= standard_metadata.$valid$ #b0)",
       "(= ethernet.$valid$ #b1)",
       "(= myTunnel.$valid$ #b0)",
-      "(= ipv4.$valid$ #b0)",
-      "(let ((a!1 (ite (and true (= (bvand ipv4.dstAddr #xffffffff) #x0a000003))\n                #b000000011\n                #b111111111)))\n(let ((a!2 (ite (and true (= (bvand ipv4.dstAddr #xffffffff) #x0a000002))\n                #b000000010\n                a!1)))\n(let ((a!3 (ite (and true (= (bvand ipv4.dstAddr #xffffffff) #x0a000001))\n                #b000000001\n                a!2)))\n  (distinct a!3 #b111111111))))"
+      "(= ipv4.$valid$ #b0)"
     ],
     "present_headers": [
       "ethernet"
     ],
     "history": [
-      "Parser",
-      "MyIngress.ipv4_lpm"
-    ],
-    "field_updates": {
-      "standard_metadata.egress_spec": "(let ((a!1 (ite (and true (= (bvand ipv4.dstAddr #xffffffff) #x0a000003))\n                #b000000011\n                #b111111111)))\n(let ((a!2 (ite (and true (= (bvand ipv4.dstAddr #xffffffff) #x0a000002))\n                #b000000010\n                a!1)))\n  (ite (and true (= (bvand ipv4.dstAddr #xffffffff) #x0a000001))\n       #b000000001\n       a!2)))",
-      "ethernet.dstAddr": "(let ((a!1 (ite (and true (= (bvand ipv4.dstAddr #xffffffff) #x0a000003))\n                #x000000000303\n                ethernet.dstAddr)))\n(let ((a!2 (ite (and true (= (bvand ipv4.dstAddr #xffffffff) #x0a000002))\n                #x000000000202\n                a!1)))\n  (ite (and true (= (bvand ipv4.dstAddr #xffffffff) #x0a000001))\n       #x000000000101\n       a!2)))",
-      "ethernet.srcAddr": "(let ((a!1 (ite (and true (= (bvand ipv4.dstAddr #xffffffff) #x0a000003))\n                ethernet.dstAddr\n                ethernet.srcAddr)))\n(let ((a!2 (ite (and true (= (bvand ipv4.dstAddr #xffffffff) #x0a000002))\n                ethernet.dstAddr\n                a!1)))\n  (ite (and true (= (bvand ipv4.dstAddr #xffffffff) #x0a000001))\n       ethernet.dstAddr\n       a!2)))",
-      "ipv4.ttl": "(let ((a!1 (ite (and true (= (bvand ipv4.dstAddr #xffffffff) #x0a000003))\n                (bvand (bvadd ipv4.ttl #xff) #xff)\n                ipv4.ttl)))\n(let ((a!2 (ite (and true (= (bvand ipv4.dstAddr #xffffffff) #x0a000002))\n                (bvand (bvadd ipv4.ttl #xff) #xff)\n                a!1)))\n  (ite (and true (= (bvand ipv4.dstAddr #xffffffff) #x0a000001))\n       (bvand (bvadd ipv4.ttl #xff) #xff)\n       a!2)))"
-    }
+      "Parser"
+    ]
   }
 ]

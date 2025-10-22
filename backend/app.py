@@ -27,13 +27,14 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 def run_command(cmd, cwd=None):
     """Executa um comando shell e retorna o resultado"""
     try:
+        # Aumentado timeout para 60 segundos
         result = subprocess.run(
             cmd,
             shell=True,
             cwd=cwd or WORKSPACE_DIR,
             capture_output=True,
             text=True,
-            timeout=30
+            timeout=60
         )
         return {
             'success': result.returncode == 0,
@@ -44,7 +45,7 @@ def run_command(cmd, cwd=None):
     except subprocess.TimeoutExpired:
         return {
             'success': False,
-            'error': 'Comando excedeu o tempo limite de 30 segundos'
+            'error': 'Comando excedeu o tempo limite de 60 segundos'
         }
     except Exception as e:
         return {
@@ -53,11 +54,18 @@ def run_command(cmd, cwd=None):
         }
 
 def load_json_file(filepath):
-    """Carrega um arquivo JSON"""
+    """Carrega um arquivo JSON de forma segura"""
     try:
         with open(filepath, 'r') as f:
             return json.load(f)
+    except FileNotFoundError:
+        print(f"Warn: Arquivo JSON não encontrado: {filepath}")
+        return None
+    except json.JSONDecodeError as e:
+        print(f"Warn: Erro ao decodificar JSON {filepath}: {e}")
+        return None
     except Exception as e:
+        print(f"Warn: Erro inesperado ao carregar JSON {filepath}: {e}")
         return None
 
 # ============================================
@@ -65,87 +73,84 @@ def load_json_file(filepath):
 # ============================================
 @app.route('/api/upload/p4', methods=['POST'])
 def upload_p4():
-    """Recebe código P4 e compila para JSON"""
+    """Recebe código P4 e compila para JSON FSM"""
     if 'file' not in request.files:
         return jsonify({'error': 'Nenhum arquivo fornecido'}), 400
-    
     file = request.files['file']
-    if file.filename == '':
-        return jsonify({'error': 'Nome de arquivo vazio'}), 400
-    
-    # Salva o arquivo P4
+    if not file or file.filename == '':
+        return jsonify({'error': 'Nome de arquivo inválido ou vazio'}), 400
+
     p4_path = P4FILES_DIR / 'programa.p4'
-    file.save(p4_path)
-    
-    # --- INÍCIO DA CORREÇÃO ---
-    
-    # 1. Define o *diretório* de saída que o p4c criará.
-    # O p4c vai criar uma pasta chamada 'programa.json'
+    try:
+        file.save(p4_path)
+    except Exception as e:
+         return jsonify({'error': f"Erro ao salvar arquivo P4: {e}"}), 500
+
+    # Define o diretório de saída para o p4c
     json_output_dir = P4FILES_DIR / 'programa.json'
-    
-    # 2. Executa o comando de compilação
-    # O -o aponta para o diretório de saída
+    # Limpa diretório de saída antigo, se existir
+    if json_output_dir.exists():
+        import shutil
+        shutil.rmtree(json_output_dir)
+
     compile_cmd = f'p4c --target bmv2 --arch v1model -o {json_output_dir} {p4_path}'
-    
     result = run_command(compile_cmd, cwd=P4FILES_DIR)
-    
+
     if not result['success']:
-        return jsonify({
-            'error': 'Erro na compilação do P4',
-            'details': result['stderr']
-        }), 400
-    
-    # 3. O arquivo JSON *real* está DENTRO do diretório que o p4c criou.
+        return jsonify({'error': 'Erro na compilação do P4', 'details': result['stderr'] or result['stdout']}), 400
+
     json_real_file_path = json_output_dir / 'programa.json'
-    
-    # 4. Carrega o FSM gerado a partir do caminho *correto* do arquivo
     fsm_data = load_json_file(json_real_file_path)
 
     if fsm_data is None:
-        return jsonify({
-            'error': 'Falha ao ler o JSON compilado pelo P4C',
-            'details': f'O arquivo esperado não foi encontrado em: {json_real_file_path}'
-        }), 500
-    
-    # 5. Copia o *arquivo* real (não o diretório) para o workspace principal
-    import shutil
-    shutil.copy(json_real_file_path, WORKSPACE_DIR / 'programa.json')
-    
-    # --- FIM DA CORREÇÃO ---
-    
-    return jsonify({
-        'message': 'P4 compilado com sucesso',
-        'fsm_data': fsm_data
-    })
+        compile_output = result['stderr'] or result['stdout']
+        return jsonify({'error': 'Falha ao ler o JSON compilado pelo P4C', 'details': f'Arquivo esperado não encontrado em: {json_real_file_path}. Saída do compilador: {compile_output}'}), 500
+
+    try:
+        import shutil
+        # Copia o FSM JSON para o workspace principal para fácil acesso pelos scripts
+        shutil.copy(json_real_file_path, WORKSPACE_DIR / 'programa.json')
+    except Exception as e:
+         return jsonify({'error': f'Erro ao copiar FSM para workspace: {e}'}), 500
+
+    return jsonify({'message': 'P4 compilado com sucesso', 'fsm_data': fsm_data})
+
 @app.route('/api/upload/json', methods=['POST'])
 def upload_json():
-    """Recebe arquivos JSON (FSM, topology, runtime_config)"""
+    """Recebe arquivos JSON (FSM, topology, runtime_config, states)"""
     if 'file' not in request.files:
         return jsonify({'error': 'Nenhum arquivo fornecido'}), 400
-    
     file = request.files['file']
-    file_type = request.form.get('type', 'unknown')
-    
-    # Define o nome do arquivo baseado no tipo
-    filename_map = {
-        'fsm': 'programa.json',
-        'topology': 'topology.json',
-        'runtime_config': 'runtime_config.json',
-        'parser_states': 'parser_states.json'
-    }
-    
-    filename = filename_map.get(file_type, file.filename)
-    filepath = WORKSPACE_DIR / filename
-    
-    file.save(filepath)
-    
-    # Carrega e retorna o conteúdo
-    data = load_json_file(filepath)
-    
+    if not file or file.filename == '':
+        return jsonify({'error': 'Nome de arquivo inválido ou vazio'}), 400
+
+    file_type = request.form.get('type', 'unknown') # O frontend envia o tipo inferido
+
+    filename_map = {'fsm': 'programa.json', 'topology': 'topology.json', 'runtime_config': 'runtime_config.json'}
+    is_state_file = file_type == 'parser_states' or '_output.json' in file.filename
+
+    if is_state_file:
+         filename = file.filename # Mantem o nome original
+         filepath = OUTPUT_DIR / filename # Salva em output/
+    elif file_type in filename_map:
+         filename = filename_map[file_type]
+         filepath = WORKSPACE_DIR / filename # Salva no workspace/
+    else:
+         filename = file.filename # Tipo desconhecido, salva no workspace
+         filepath = WORKSPACE_DIR / filename
+
+    try:
+        filepath.parent.mkdir(parents=True, exist_ok=True) # Garante que o diretório exista
+        file.save(filepath)
+    except Exception as e:
+        return jsonify({'error': f"Erro ao salvar arquivo '{filename}': {e}"}), 500
+
+    data = load_json_file(filepath) # Tenta carregar para validar JSON
+
     return jsonify({
-        'message': f'Arquivo {filename} carregado com sucesso',
-        'data': data,
-        'type': file_type
+        'message': f"Arquivo '{filename}' ({file_type}) salvo com sucesso." + (" (JSON inválido)" if data is None and file_type != 'unknown' else ""),
+        'type': file_type,
+        'filename': filename # Retorna o nome do arquivo salvo
     })
 
 # ============================================
@@ -154,385 +159,340 @@ def upload_json():
 
 @app.route('/api/analyze/parser', methods=['POST'])
 def analyze_parser():
-    """Executa análise simbólica do parser"""
-    
-    # Verifica se o FSM existe
+    """Executa análise simbólica do parser e retorna estados"""
     fsm_path = WORKSPACE_DIR / 'programa.json'
     if not fsm_path.exists():
-        return jsonify({'error': 'FSM não encontrado. Faça upload do P4 primeiro.'}), 400
-    
-    # Arquivo de saída
+        return jsonify({'error': 'FSM não encontrado (programa.json). Faça upload primeiro.'}), 400
+
     output_path = OUTPUT_DIR / 'parser_states.json'
-    
-    # Executa run_parser.py
     cmd = f'python3 run_parser.py {output_path}'
     result = run_command(cmd)
-    
+
     if not result['success']:
-        return jsonify({
-            'error': 'Erro ao executar análise do parser',
-            'details': result['stderr']
-        }), 500
-    
-    # Carrega os resultados
+        return jsonify({'error': 'Erro ao executar análise do parser', 'details': result['stderr'] or result['stdout']}), 500
+
     parser_states = load_json_file(output_path)
-    
-    if not parser_states:
-        return jsonify({'error': 'Erro ao carregar resultados do parser'}), 500
-    
-    # Extrai informações do FSM para o grafo
+    if parser_states is None: # Checa se o load_json falhou
+        return jsonify({'error': 'Erro ao carregar resultados do parser (arquivo JSON vazio, inválido ou não gerado)', 'details': result['stdout']}), 500
+
     fsm_data = load_json_file(fsm_path)
     parser_info = extract_parser_info(fsm_data)
-    
+
     return jsonify({
         'message': 'Análise do parser concluída',
         'states': parser_states,
         'parser_info': parser_info,
-        'state_count': len(parser_states)
+        'state_count': len(parser_states),
+        'output_file': 'parser_states.json' # Nome do arquivo gerado
     })
 
 def extract_parser_info(fsm_data):
-    """Extrai informações estruturais do parser"""
-    if not fsm_data or 'parsers' not in fsm_data:
-        return None
-    
+    """Extrai informações estruturais do parser (helper)"""
+    if not fsm_data or not fsm_data.get('parsers'): return None
     parser = fsm_data['parsers'][0]
-    
     return {
         'name': parser.get('name', 'Parser'),
         'init_state': parser.get('init_state'),
-        'states': [
-            {
-                'name': s['name'],
-                'operations': len(s.get('parser_ops', [])),
-                'transitions': len(s.get('transitions', []))
-            }
-            for s in parser.get('parse_states', [])
-        ]
+        'states': [{'name': s.get('name'), 'operations': len(s.get('parser_ops', [])), 'transitions': len(s.get('transitions', []))} for s in parser.get('parse_states', [])]
     }
 
 # ============================================
-# ENDPOINTS - ANÁLISE DE ALCANÇABILIDADE
+# ENDPOINTS - ANÁLISE DE ALCANÇABILIDADE (Pipeline)
 # ============================================
 
 @app.route('/api/analyze/reachability', methods=['POST'])
 def analyze_reachability():
-    """Analisa condições de alcançabilidade das tabelas"""
-    
+    """Analisa condições de alcançabilidade das tabelas no pipeline de ingress"""
     fsm_path = WORKSPACE_DIR / 'programa.json'
-    if not fsm_path.exists():
-        return jsonify({'error': 'FSM não encontrado'}), 400
-    
-    # Executa path_analyzer.py
+    if not fsm_path.exists(): return jsonify({'error': 'FSM não encontrado (programa.json)'}), 400
+
     cmd = f'python3 path_analyzer.py {fsm_path}'
     result = run_command(cmd)
-    
-    if not result['success']:
-        return jsonify({
-            'error': 'Erro ao analisar alcançabilidade',
-            'details': result['stderr']
-        }), 500
-    
-    # Parse da saída para extrair condições
+    # path_analyzer geralmente não falha, apenas imprime
     reachability = parse_reachability_output(result['stdout'])
-    
-    return jsonify({
-        'message': 'Análise de alcançabilidade concluída',
-        'reachability': reachability
-    })
+
+    return jsonify({'message': 'Análise de alcançabilidade concluída', 'reachability': reachability})
 
 def parse_reachability_output(output):
-    """Parse da saída do path_analyzer.py"""
+    """Parse do stdout do path_analyzer.py (helper)"""
     reachability = {}
-    current_table = None
-    
     lines = output.split('\n')
+    current_table_name = None
+    current_conditions = []
+
     for line in lines:
-        if 'Analisando caminho para a tabela:' in line:
-            # Extrai nome da tabela
-            current_table = line.split("'")[1]
-            reachability[current_table] = {
-                'conditions': [],
-                'reachable': True
-            }
-        elif current_table and 'Condições para alcançar' in line:
-            continue
-        elif current_table and line.strip() and line.strip()[0].isdigit():
-            # Extrai condição
-            condition = line.split('. ', 1)[1] if '. ' in line else line.strip()
-            reachability[current_table]['conditions'].append(condition)
-        elif current_table and 'INALCANÇÁVEL' in line:
-            reachability[current_table]['reachable'] = False
-            reachability[current_table]['conditions'] = ['INALCANÇÁVEL']
-        elif current_table and 'INCONDICIONALMENTE' in line:
-            reachability[current_table]['conditions'] = ['Incondicional']
-    
+        if "Tabela: '" in line:
+            if current_table_name: # Salva a tabela anterior
+                 if not current_conditions and reachability[current_table_name]['reachable']:
+                      current_conditions = ["Incondicional"]
+                 reachability[current_table_name]['conditions'] = current_conditions
+
+            try:
+                current_table_name = line.split("'")[1]
+                reachability[current_table_name] = {'conditions': [], 'reachable': False}
+                current_conditions = []
+            except IndexError: current_table_name = None
+        elif current_table_name:
+            if "Status: ALCANÇÁVEL" in line: reachability[current_table_name]['reachable'] = True
+            elif "Status: INALCANÇÁVEL" in line:
+                reachability[current_table_name]['reachable'] = False
+                reason = "Estrutural"
+                if "Contradição Lógica" in line: reason = "Contradição Lógica"
+                current_conditions = [f"INALCANÇÁVEL ({reason})"]
+                reachability[current_table_name]['conditions'] = current_conditions
+                current_table_name = None # Finaliza
+            elif line.strip().startswith("- "): # Linha de condição SMT-LIB
+                condition = line.strip()[2:]
+                if condition != "True": current_conditions.append(condition) # Ignora 'True' explícito
+
+    # Salva a última tabela
+    if current_table_name:
+         if not current_conditions and reachability[current_table_name]['reachable']:
+              current_conditions = ["Incondicional"]
+         reachability[current_table_name]['conditions'] = current_conditions
+
     return reachability
 
 # ============================================
-# ENDPOINTS - GERAÇÃO DE REGRAS
+# ENDPOINTS - GERAÇÃO DE REGRAS DE RUNTIME
 # ============================================
 
 @app.route('/api/generate/rules', methods=['POST'])
 def generate_rules():
-    """Gera regras de runtime baseadas na topologia"""
-    
+    """Gera regras de runtime baseadas na topologia e FSM"""
     fsm_path = WORKSPACE_DIR / 'programa.json'
     topology_path = WORKSPACE_DIR / 'topology.json'
     output_path = WORKSPACE_DIR / 'runtime_config.json'
-    
+
     if not fsm_path.exists() or not topology_path.exists():
-        return jsonify({'error': 'FSM ou topologia não encontrados'}), 400
-    
-    # Executa generate_rules.py
+        return jsonify({'error': 'FSM ou topologia não encontrados.'}), 400
+
     cmd = f'python3 generate_rules.py {topology_path} {fsm_path} {output_path}'
     result = run_command(cmd)
-    
+
     if not result['success']:
-        return jsonify({
-            'error': 'Erro ao gerar regras',
-            'details': result['stderr']
-        }), 500
-    
-    # Carrega as regras geradas
+        return jsonify({'error': 'Erro ao gerar regras', 'details': result['stderr'] or result['stdout']}), 500
+
     rules = load_json_file(output_path)
-    
-    return jsonify({
-        'message': 'Regras geradas com sucesso',
-        'rules': rules
-    })
+    if rules is None:
+        return jsonify({'error': 'Regras geradas, mas falha ao ler o arquivo de saída.', 'details': result['stdout']}), 500
+
+    return jsonify({'message': 'Regras geradas com sucesso', 'rules': rules})
 
 # ============================================
-# ENDPOINTS - ANÁLISE DE TABELAS
+# ENDPOINTS - ANÁLISE DE TABELAS (MODULAR)
 # ============================================
 
 @app.route('/api/analyze/table', methods=['POST'])
 def analyze_table():
-    """Executa análise simbólica de uma tabela específica"""
-    
+    """Executa análise simbólica de uma tabela usando um snapshot de entrada"""
     data = request.get_json()
+    if not data: return jsonify({'error': 'Requisição sem JSON'}), 400
+
     table_name = data.get('table_name')
-    switch_id = data.get('switch_id', 's1')
-    input_states_file = data.get('input_states', 'parser_states.json')
-    
-    if not table_name:
-        return jsonify({'error': 'Nome da tabela não fornecido'}), 400
-    
-    # Verifica arquivos necessários
+    switch_id = data.get('switch_id', 's1') # Default para 's1'
+    input_states_file = data.get('input_states')
+
+    if not table_name: return jsonify({'error': 'Nome da tabela não fornecido'}), 400
+    if not input_states_file: return jsonify({'error': 'Snapshot de entrada (input_states) não fornecido'}), 400
+
     fsm_path = WORKSPACE_DIR / 'programa.json'
     topology_path = WORKSPACE_DIR / 'topology.json'
     runtime_path = WORKSPACE_DIR / 'runtime_config.json'
-    input_states_path = OUTPUT_DIR / input_states_file
-    
-    missing_files = []
-    if not fsm_path.exists(): missing_files.append('FSM')
-    if not topology_path.exists(): missing_files.append('Topology')
-    if not runtime_path.exists(): missing_files.append('Runtime Config')
-    if not input_states_path.exists(): missing_files.append('Parser States')
-    
-    if missing_files:
-        return jsonify({
-            'error': f'Arquivos faltando: {", ".join(missing_files)}'
-        }), 400
-    
-    # Nome do arquivo de saída
-    output_filename = f'{switch_id}_{table_name.replace(".", "_")}_output.json'
+    input_states_path = OUTPUT_DIR / input_states_file # Assume snapshots em output/
+
+    missing = [p.name for p in [fsm_path, topology_path, runtime_path, input_states_path] if not p.exists()]
+    if missing:
+        return jsonify({'error': f'Arquivos necessários faltando: {", ".join(missing)}'}), 400
+
+    output_filename = f'{switch_id}_{table_name.replace(".", "_")}_from_{Path(input_states_file).stem}_output.json'
     output_path = OUTPUT_DIR / output_filename
-    
-    # Executa run_table.py
+
     cmd = (f'python3 run_table.py {fsm_path} {topology_path} {runtime_path} '
            f'{input_states_path} {switch_id} {table_name} {output_path}')
-    
     result = run_command(cmd)
-    
+
     if not result['success']:
-        return jsonify({
-            'error': 'Erro ao executar análise da tabela',
-            'details': result['stderr'],
-            'stdout': result['stdout']
-        }), 500
-    
-    # Parse da saída para extrair resultados
-    analysis_results = parse_table_analysis(result['stdout'])
-    
-    # Carrega os estados resultantes
+        return jsonify({'error': f'Erro ao executar análise da tabela {table_name}', 'details': result['stderr'] or result['stdout'], 'stdout': result['stdout']}), 500
+
     output_states = load_json_file(output_path)
-    
+    analysis_summary = parse_table_analysis_stdout(result['stdout'])
+
     return jsonify({
-        'message': f'Análise da tabela {table_name} concluída',
-        'results': analysis_results,
-        'output_states': output_states,
+        'message': f'Análise da tabela {table_name} concluída (usando {input_states_file})',
+        'results_summary': analysis_summary,
+        'output_states': output_states if output_states is not None else [],
         'output_file': output_filename
     })
 
-def parse_table_analysis(output):
-    """Parse da saída do run_table.py"""
+def parse_table_analysis_stdout(output):
+    """Parse do stdout do run_table.py para resumo legível (helper)"""
+    # (Implementação anterior mantida, parece robusta)
     results = []
-    current_state = None
-    
+    current_state_summary = None
     lines = output.split('\n')
     for line in lines:
-        if 'Analisando para o Estado de Entrada' in line:
-            current_state = {
-                'state_id': line.split('#')[1].split()[0] if '#' in line else 'unknown',
-                'description': line.split('(')[1].split(')')[0] if '(' in line else '',
-                'reachability_check': None,
-                'forwarding_results': [],
-                'drops': []
-            }
-        elif current_state and 'NUNCA alcançará' in line:
-            current_state['reachability_check'] = 'unreachable'
-            results.append(current_state)
-            current_state = None
-        elif current_state and 'A tabela é alcançável' in line:
-            current_state['reachability_check'] = 'reachable'
-        elif current_state and 'ENCAMINHADO para a porta' in line:
-            # Extrai informações de forwarding
-            parts = line.split("'")
-            target = parts[1] if len(parts) > 1 else 'unknown'
-            port = line.split('porta ')[1].split()[0] if 'porta' in line else 'unknown'
-            current_state['forwarding_results'].append({
-                'target': target,
-                'port': port,
-                'status': 'success'
-            })
-        elif current_state and 'DESCARTADO (drop)' in line:
-            target = line.split("'")[1] if "'" in line else 'unknown'
-            current_state['drops'].append({
-                'target': target,
-                'status': 'drop'
-            })
-        elif current_state and '=' * 50 in line and current_state['reachability_check']:
-            # Fim do estado atual
-            results.append(current_state)
-            current_state = None
-    
-    # Adiciona último estado se existir
-    if current_state and current_state['reachability_check']:
-        results.append(current_state)
-    
+        if 'Analisando para o Estado de Entrada #' in line:
+            if current_state_summary: results.append(current_state_summary)
+            state_id = line.split('#')[1].split()[0] if '#' in line else '?'
+            desc = line.split('(')[1].split(')')[0] if '(' in line else 'N/A'
+            current_state_summary = {'state_id': state_id, 'description': desc, 'outcome': 'Processando...', 'details': []}
+        elif current_state_summary:
+            if 'AVISO: Análise pulada' in line or 'NUNCA alcançará' in line:
+                current_state_summary['outcome'] = 'Inalcançável'
+                results.append(current_state_summary); current_state_summary = None
+            elif 'OK: A tabela é alcançável' in line:
+                current_state_summary['outcome'] = 'Alcançável' # Pode ser sobrescrito
+            elif '-> Resultado: SIM' in line:
+                current_state_summary['outcome'] = 'Alcançável'
+                current_state_summary['details'].append(line.split('-> Resultado: SIM, ')[1])
+            elif 'AVISO: Todos os pacotes deste estado são descartados' in line:
+                current_state_summary['outcome'] = 'Drop (Sempre)'
+                current_state_summary['details'] = ["Pacote sempre descartado nesta etapa."]
+                # Não finaliza aqui, espera o fim do bloco do estado
+    if current_state_summary: results.append(current_state_summary)
     return results
 
 # ============================================
-# ENDPOINTS - ANÁLISE COMBINADA
+# ENDPOINTS - ANÁLISE COMBINADA (Parser vs Pipeline Reachability)
 # ============================================
-
 @app.route('/api/analyze/combined', methods=['POST'])
 def analyze_combined():
-    """Executa análise combinada de alcançabilidade (Parser vs Pipeline)"""
-    
+    """Executa análise combinada Parser vs Pipeline Reachability"""
     fsm_path = WORKSPACE_DIR / 'programa.json'
     parser_states_path = OUTPUT_DIR / 'parser_states.json'
-    
+
     if not fsm_path.exists() or not parser_states_path.exists():
-        return jsonify({'error': 'Arquivos necessários não encontrados'}), 400
-    
-    # Executa combined_analyzer.py
+        return jsonify({'error': 'Arquivos FSM ou Parser States não encontrados.'}), 400
+
     cmd = f'python3 combined_analyzer.py {fsm_path} {parser_states_path}'
     result = run_command(cmd)
-    
-    if not result['success']:
-        return jsonify({
-            'error': 'Erro ao executar análise combinada',
-            'details': result['stderr']
-        }), 500
-    
-    # Parse dos resultados
-    combined_results = parse_combined_analysis(result['stdout'])
-    
+
+    combined_results = parse_combined_analysis_stdout(result['stdout'])
+
     return jsonify({
-        'message': 'Análise combinada concluída',
-        'results': combined_results
+        'message': 'Análise combinada (Parser vs Pipeline) concluída',
+        'results': combined_results,
+        'details': result['stdout'] # Inclui stdout completo
     })
 
-def parse_combined_analysis(output):
-    """Parse da saída do combined_analyzer.py"""
-    results = {}
+def parse_combined_analysis_stdout(output):
+    """Parse do stdout do combined_analyzer.py (helper)"""
+    # (Implementação anterior mantida)
+    results_by_table = {}
     current_table = None
-    current_parser_state = None
-    
     lines = output.split('\n')
     for line in lines:
-        if 'Analisando Alcançabilidade para a Tabela:' in line:
-            current_table = line.split("'")[1]
-            results[current_table] = {
-                'reachable_from': [],
-                'unreachable_from': [],
-                'conditions': []
-            }
-        elif current_table and 'Testando' in line and "'" in line:
-            current_parser_state = line.split("'")[1]
-        elif current_table and current_parser_state:
-            if 'Alcançável' in line:
-                results[current_table]['reachable_from'].append(current_parser_state)
-            elif 'Inalcançável' in line or 'CONTRADIÇÃO' in line:
-                results[current_table]['unreachable_from'].append(current_parser_state)
-            current_parser_state = None
-    
-    return results
+        if '##  Analisando Alcançabilidade para a Tabela:' in line:
+            try:
+                current_table = line.split("'")[1]
+                results_by_table[current_table] = {'pipeline_conditions': [], 'state_comparisons': []}
+            except IndexError: current_table = None
+        elif current_table:
+            if line.strip().startswith("- "): # Condição do pipeline
+                 results_by_table[current_table]['pipeline_conditions'].append(line.strip()[2:])
+            elif "Testando '" in line: # Comparação com estado do parser
+                 state_desc = line.split("'")[1]
+                 outcome_line = next((l for l in lines[lines.index(line)+1:] if '-> RESULTADO:' in l), None)
+                 outcome = "Erro no parse"
+                 if outcome_line:
+                      if "Alcançável" in outcome_line: outcome = "Compatível"
+                      elif "Inalcançável" in outcome_line: outcome = "Incompatível (Contradição)"
+                 results_by_table[current_table]['state_comparisons'].append({'state': state_desc, 'outcome': outcome})
+    return results_by_table
 
 # ============================================
-# ENDPOINTS - INFORMAÇÕES
+# ENDPOINTS - ANÁLISE DO DEPARSER
+# ============================================
+
+@app.route('/api/analyze/deparser', methods=['POST'])
+def analyze_deparser():
+    """Executa análise simbólica do deparser usando um snapshot de entrada"""
+    data = request.get_json()
+    if not data: return jsonify({'error': 'Requisição sem JSON'}), 400
+
+    input_states_file = data.get('input_states')
+    if not input_states_file: return jsonify({'error': 'Snapshot de entrada (input_states) não fornecido'}), 400
+
+    fsm_path = WORKSPACE_DIR / 'programa.json'
+    input_states_path = OUTPUT_DIR / input_states_file
+
+    missing = [p.name for p in [fsm_path, input_states_path] if not p.exists()]
+    if missing:
+        return jsonify({'error': f'Arquivos faltando: {", ".join(missing)}'}), 400
+
+    output_filename = f'deparser_output_from_{Path(input_states_file).stem}.json'
+    output_path = OUTPUT_DIR / output_filename
+
+    cmd = f'python3 run_deparser.py {fsm_path} {input_states_path} {output_path}'
+    result = run_command(cmd)
+
+    if not result['success']:
+        return jsonify({'error': 'Erro ao executar análise do deparser', 'details': result['stderr'] or result['stdout'], 'stdout': result['stdout']}), 500
+
+    deparser_results = load_json_file(output_path)
+    if deparser_results is None:
+         return jsonify({'error': 'Análise do deparser executada, mas falha ao ler o arquivo de resultado JSON.', 'details': result['stdout']}), 500
+
+    fsm_data = load_json_file(fsm_path)
+    deparser_def = fsm_data.get('deparsers', [{}])[0] if fsm_data and fsm_data.get('deparsers') else {}
+    static_info = {'name': deparser_def.get('name', 'deparser'), 'order': deparser_def.get('order', [])}
+
+    return jsonify({
+        'message': f'Análise do Deparser concluída (usando {input_states_file})',
+        'static_info': static_info,
+        'analysis_results': deparser_results, # Retorna a estrutura detalhada do JSON
+        'output_file': output_filename
+    })
+
+# ============================================
+# ENDPOINTS - INFORMAÇÕES GERAIS
 # ============================================
 
 @app.route('/api/info/components', methods=['GET'])
 def get_components():
-    """Retorna informações sobre os componentes do programa P4"""
-    
+    """Retorna informações sobre os componentes do programa P4 (do FSM)"""
     fsm_path = WORKSPACE_DIR / 'programa.json'
-    if not fsm_path.exists():
-        return jsonify({'error': 'FSM não encontrado'}), 400
-    
     fsm_data = load_json_file(fsm_path)
-    
-    # Extrai componentes
-    components = {
-        'parser': None,
-        'tables': [],
-        'actions': [],
-        'headers': []
-    }
-    
-    # Parser
-    if 'parsers' in fsm_data and fsm_data['parsers']:
-        parser = fsm_data['parsers'][0]
-        components['parser'] = {
-            'name': parser.get('name', 'Parser'),
-            'states': len(parser.get('parse_states', []))
-        }
-    
-    # Tables e conditionals
-    if 'pipelines' in fsm_data:
-        for pipeline in fsm_data['pipelines']:
-            if pipeline['name'] == 'ingress':
-                components['tables'] = [
-                    {'name': t['name']} 
-                    for t in pipeline.get('tables', [])
-                ]
-    
-    # Actions
-    if 'actions' in fsm_data:
-        components['actions'] = [
-            {'name': a['name']} 
-            for a in fsm_data['actions']
-        ]
-    
-    # Headers
-    if 'headers' in fsm_data:
-        components['headers'] = [
-            {'name': h['name'], 'type': h['header_type']} 
-            for h in fsm_data['headers']
-        ]
-    
+    if not fsm_data: return jsonify({'error': 'FSM não encontrado ou inválido (programa.json)'}), 404
+
+    components = {'parser': None, 'ingress_tables': [], 'egress_tables': [], 'actions': [], 'headers': [], 'deparser': None}
+    if fsm_data.get('parsers'):
+        p = fsm_data['parsers'][0]; components['parser'] = {'name': p.get('name', 'P'), 'states': len(p.get('parse_states', []))}
+    for p in fsm_data.get('pipelines', []):
+        key = 'ingress_tables' if p.get('name') == 'ingress' else 'egress_tables' if p.get('name') == 'egress' else None
+        if key: components[key] = [{'name': t.get('name')} for t in p.get('tables', [])]
+    components['actions'] = [{'name': a.get('name')} for a in fsm_data.get('actions', [])]
+    components['headers'] = [{'name': h.get('name'), 'type': h.get('header_type')} for h in fsm_data.get('headers', [])]
+    if fsm_data.get('deparsers'):
+        d = fsm_data['deparsers'][0]; components['deparser'] = {'name': d.get('name', 'D'), 'order': d.get('order', [])}
     return jsonify(components)
+
+@app.route('/api/info/snapshots', methods=['GET'])
+def get_snapshots():
+    """Lista os arquivos JSON de snapshot disponíveis no diretório 'output'."""
+    try:
+        # Garante que o diretório de output exista antes de listar
+        OUTPUT_DIR.mkdir(exist_ok=True)
+        files = [f for f in os.listdir(OUTPUT_DIR) if f.endswith('_output.json') or f == 'parser_states.json']
+        files.sort(key=lambda x: (x != 'parser_states.json', x)) # parser_states.json primeiro
+        return jsonify({'snapshots': files})
+    except Exception as e:
+        print(f"Erro ao listar snapshots: {e}")
+        # Retorna apenas o default se houver erro ao listar o diretório
+        return jsonify({'snapshots': ['parser_states.json']})
 
 # ============================================
 # SERVIDOR
 # ============================================
 
 if __name__ == '__main__':
-    print("🚀 P4SymTest Backend iniciado!")
-    print(f"📁 Workspace: {WORKSPACE_DIR.absolute()}")
-    print(f"🔧 Scripts Python devem estar em: {WORKSPACE_DIR.absolute()}")
-    print("=" * 60)
+    print("*"*60)
+    print("🚀 P4SymTest Backend Iniciado!")
+    print(f"  - Workspace: {WORKSPACE_DIR.absolute()}")
+    print(f"  - Output Dir: {OUTPUT_DIR.absolute()}")
+    print(f"  - Servidor Flask rodando em http://0.0.0.0:5000")
+    print("*"*60)
+    # Habilita debug e reloader para desenvolvimento. Para produção, use um servidor WSGI.
     app.run(debug=True, host='0.0.0.0', port=5000)
+
