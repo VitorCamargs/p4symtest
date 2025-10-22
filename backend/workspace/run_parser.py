@@ -1,4 +1,4 @@
-# run_parser.py (Versão Corrigida)
+# run_parser.py (Versão Corrigida - sem scalars.$valid$)
 import json
 import sys
 from z3 import *
@@ -69,9 +69,13 @@ def explore_parser(state_name, path_desc_list, path_conditions, extracted_header
             # 1. Adiciona as condições de transição do caminho
             final_constraints.extend(final_path_conditions)
             
-            # 2. Adiciona as condições de validade FINAIS
+            # 2. Adiciona as condições de validade FINAIS (EXCETO para 'scalars')
             for h in fsm_data['headers']:
                 h_name = h['name']
+                # *** CORREÇÃO: Pula o header 'scalars' ***
+                if h_name == 'scalars':
+                    continue
+                    
                 is_valid_constraint = (fields[(h_name, '$valid$')] == 1) if h_name in new_extracted_headers else (fields[(h_name, '$valid$')] == 0)
                 final_constraints.append(is_valid_constraint)
 
@@ -101,7 +105,9 @@ if __name__ == "__main__":
         if ht_name in header_types:
             for f_name, f_width, _ in header_types[ht_name]['fields']:
                 fields[(h['name'], f_name)] = BitVec(f"{h['name']}.{f_name}", f_width)
-        fields[(h['name'], '$valid$')] = BitVec(f"{h['name']}.$valid$", 1)
+        # *** CORREÇÃO: Não cria $valid$ para 'scalars' ***
+        if h['name'] != 'scalars':
+            fields[(h['name'], '$valid$')] = BitVec(f"{h['name']}.$valid$", 1)
     
     print("--- Iniciando análise simbólica do Parser ---")
     parser_initial_state = fsm_data['parsers'][0]['init_state']
