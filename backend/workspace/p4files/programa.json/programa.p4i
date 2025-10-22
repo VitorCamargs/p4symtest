@@ -893,7 +893,8 @@ const bit<16> TYPE_IPV4 = 0x800;
 *********************** H E A D E R S  ***********************************
 *************************************************************************/
 
-typedef bit<9> egressSpec_t;
+typedef bit<9> egressSpec_t; // Usado no ingress para indicar porta de saída
+typedef bit<9> egressPort_t; // Usado no egress (standard_metadata.egress_port)
 typedef bit<48> macAddr_t;
 typedef bit<32> ip4Addr_t;
 
@@ -924,7 +925,9 @@ header ipv4_t {
 }
 
 struct metadata {
-    /* empty */
+    /* Você pode adicionar metadados aqui se precisar passar
+       informações do ingress para o egress que não estejam
+       nos headers ou standard_metadata. */
 }
 
 struct headers {
@@ -971,7 +974,7 @@ parser MyParser(packet_in packet,
 }
 
 /*************************************************************************
-************   C H E C K S U M    V E R I F I C A T I O N   *************
+************ C H E C K S U M    V E R I F I C A T I O N   *************
 *************************************************************************/
 
 control MyVerifyChecksum(inout headers hdr, inout metadata meta) {
@@ -980,7 +983,7 @@ control MyVerifyChecksum(inout headers hdr, inout metadata meta) {
 
 
 /*************************************************************************
-**************  I N G R E S S   P R O C E S S I N G   *******************
+************** I N G R E S S   P R O C E S S I N G   *******************
 *************************************************************************/
 
 control MyIngress(inout headers hdr,
@@ -991,9 +994,12 @@ control MyIngress(inout headers hdr,
     }
 
     action ipv4_forward(macAddr_t dstAddr, egressSpec_t port) {
+        // Define a porta de saída física
         standard_metadata.egress_spec = port;
-        hdr.ethernet.srcAddr = hdr.ethernet.dstAddr;
+        // Prepara L2 para o próximo hop (será sobrescrito no egress se necessário)
+        hdr.ethernet.srcAddr = hdr.ethernet.dstAddr; // Temporário, será reescrito no Egress
         hdr.ethernet.dstAddr = dstAddr;
+        // Decrementa TTL
         hdr.ipv4.ttl = hdr.ipv4.ttl - 1;
     }
 
@@ -1004,14 +1010,15 @@ control MyIngress(inout headers hdr,
         actions = {
             ipv4_forward;
             drop;
-            NoAction;
+            NoAction; // Caso não queira modificar nada
         }
         size = 1024;
-        default_action = drop();
+        default_action = drop(); // Descarta se não houver rota
     }
 
     action myTunnel_forward(egressSpec_t port) {
         standard_metadata.egress_spec = port;
+        // Note: Para túneis, geralmente não se modifica L2/L3 interno no ingress
     }
 
     table myTunnel_exact {
@@ -1027,34 +1034,69 @@ control MyIngress(inout headers hdr,
     }
 
     apply {
+        // Verifica se TTL expirou
+
         if (hdr.ipv4.isValid() && !hdr.myTunnel.isValid()) {
-            // Process only non-tunneled IPv4 packets
+            // Processa pacotes IPv4 não tunelados
             ipv4_lpm.apply();
         }
 
         if (hdr.myTunnel.isValid()) {
-            // process tunneled packets
+            // Processa pacotes tunelados
             myTunnel_exact.apply();
         }
+
+        // Se nenhuma tabela foi aplicada ou resultou em NoAction,
+        // o pacote pode prosseguir com egress_spec indefinido (pode ser dropado depois)
+        // ou você pode definir um drop explícito aqui se preferir.
+        // if (standard_metadata.egress_spec == 0) { drop(); } // Exemplo opcional
     }
 }
 
 /*************************************************************************
-****************  E G R E S S   P R O C E S S I N G   *******************
+**************** E G R E S S   P R O C E S S I N G   *******************
 *************************************************************************/
 
 control MyEgress(inout headers hdr,
                  inout metadata meta,
                  inout standard_metadata_t standard_metadata) {
-    apply { }
+
+    // Ação para reescrever o MAC de origem baseado na porta de saída
+    action rewrite_src_mac(macAddr_t smac) {
+        hdr.ethernet.srcAddr = smac;
+    }
+
+    // Tabela que mapeia a porta de saída física para o MAC de origem a ser usado
+    table egress_port_smac {
+        key = {
+            // standard_metadata.egress_port contém a porta física final
+            standard_metadata.egress_port: exact;
+        }
+        actions = {
+            rewrite_src_mac;
+            NoAction; // Se não precisar reescrever para alguma porta
+        }
+        size = 256; // Ajuste conforme necessário
+        // A ação padrão pode ser não fazer nada ou usar um MAC default
+        default_action = NoAction();
+    }
+
+    apply {
+        // Aplica a tabela para reescrever o MAC de origem
+        // Somente se o header Ethernet for válido (será emitido)
+        if (hdr.ethernet.isValid()) {
+             egress_port_smac.apply();
+        }
+    }
 }
 
 /*************************************************************************
-*************   C H E C K S U M    C O M P U T A T I O N   **************
+************* C H E C K S U M    C O M P U T A T I O N   **************
 *************************************************************************/
 
 control MyComputeChecksum(inout headers hdr, inout metadata meta) {
      apply {
+        // Recalcula checksum IPv4 (TTL foi modificado no ingress)
         update_checksum(
             hdr.ipv4.isValid(),
             { hdr.ipv4.version,
@@ -1074,19 +1116,20 @@ control MyComputeChecksum(inout headers hdr, inout metadata meta) {
 }
 
 /*************************************************************************
-***********************  D E P A R S E R  *******************************
+*********************** D E P A R S E R  *******************************
 *************************************************************************/
 
 control MyDeparser(packet_out packet, in headers hdr) {
     apply {
+        // Emite os headers na ordem correta, se forem válidos
         packet.emit(hdr.ethernet);
-        packet.emit(hdr.myTunnel);
-        packet.emit(hdr.ipv4);
+        packet.emit(hdr.myTunnel); // Só emite se myTunnel.isValid()
+        packet.emit(hdr.ipv4); // Só emite se ipv4.isValid()
     }
 }
 
 /*************************************************************************
-***********************  S W I T C H  *******************************
+*********************** S W I T C H  *******************************
 *************************************************************************/
 
 V1Switch(
@@ -1095,5 +1138,5 @@ MyVerifyChecksum(),
 MyIngress(),
 MyEgress(),
 MyComputeChecksum(),
-MyDeparser()
+MyDeparser() // <<--- VÍRGULA REMOVIDA DAQUI
 ) main;

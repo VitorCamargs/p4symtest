@@ -402,6 +402,66 @@ def parse_combined_analysis_stdout(output):
     return results_by_table
 
 # ============================================
+# ENDPOINTS - ANÁLISE DE TABELAS EGRESS (NOVO)
+# ============================================
+
+@app.route('/api/analyze/egress_table', methods=['POST'])
+def analyze_egress_table():
+    """Executa análise simbólica de uma tabela Egress específica"""
+    data = request.get_json()
+    if not data: return jsonify({'error': 'Requisição sem JSON'}), 400
+
+    table_name = data.get('table_name') # Nome da tabela Egress
+    switch_id = data.get('switch_id', 's1')
+    input_states_file = data.get('input_states')
+
+    if not table_name: return jsonify({'error': 'Nome da tabela Egress não fornecido'}), 400
+    if not input_states_file: return jsonify({'error': 'Snapshot de entrada não fornecido'}), 400
+
+    fsm_path = WORKSPACE_DIR / 'programa.json'
+    runtime_path = WORKSPACE_DIR / 'runtime_config.json'
+    input_states_path = OUTPUT_DIR / input_states_file
+
+    missing = [p.name for p in [fsm_path, runtime_path, input_states_path] if not p.exists()]
+    if missing:
+        return jsonify({'error': f'Arquivos necessários faltando: {", ".join(missing)}'}), 400
+
+    output_filename = f'{switch_id}_{table_name.replace(".", "_")}_from_{Path(input_states_file).stem}_output.json'
+    output_path = OUTPUT_DIR / output_filename
+
+    # Chama o novo script run_table_egress.py
+    cmd = (f'python3 run_table_egress.py {fsm_path} {runtime_path} '
+           f'{input_states_path} {switch_id} {table_name} {output_path}')
+
+    print(f"Executando comando Egress Table: {cmd}") # Log para debug
+    result = run_command(cmd)
+
+    if not result['success']:
+        return jsonify({
+            'error': f'Erro ao executar análise da tabela Egress {table_name}',
+            'details': result.get('stderr') or result.get('stdout', 'Sem detalhes.'),
+            'stdout': result.get('stdout', '')
+        }), 500
+
+    output_states = load_json_file(output_path)
+    if output_states is None:
+         return jsonify({
+             'error': 'Análise da tabela Egress executada, mas falha ao ler o JSON de resultado.',
+             'details': result.get('stdout', ''),
+             'output_file': output_filename
+        }), 500
+
+    # Pode adicionar parsing do stdout se run_table_egress.py gerar resumo
+    # summary = parse_table_analysis_stdout(result['stdout'])
+
+    return jsonify({
+        'message': f'Análise da tabela Egress {table_name} concluída (usando {input_states_file})',
+        # 'results_summary': summary,
+        'output_states': output_states,
+        'output_file': output_filename
+    })
+
+# ============================================
 # ENDPOINTS - ANÁLISE DO DEPARSER
 # ============================================
 

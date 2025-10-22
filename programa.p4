@@ -152,9 +152,6 @@ control MyIngress(inout headers hdr,
 
     apply {
         // Verifica se TTL expirou
-        if (hdr.ipv4.isValid() && hdr.ipv4.ttl <= 1) {
-            drop(); // Descarta pacotes com TTL 0 ou 1 antes do L3 lookup
-        }
 
         if (hdr.ipv4.isValid() && !hdr.myTunnel.isValid()) {
             // Processa pacotes IPv4 não tunelados
