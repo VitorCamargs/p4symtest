@@ -1,0 +1,443 @@
+{
+  "s1": {
+    "MyIngress.ingress_table_0": [
+      {
+        "match": {
+          "hdr.proto0.protocol": 144
+        },
+        "action": "MyIngress.table0_action0",
+        "action_params": {
+          "port": 1
+        }
+      },
+      {
+        "match": {
+          "hdr.proto0.protocol": 145
+        },
+        "action": "MyIngress.table0_action1",
+        "action_params": {
+          "port": 2
+        }
+      },
+      {
+        "match": {
+          "hdr.proto0.protocol": 146
+        },
+        "action": "MyIngress.table0_action2",
+        "action_params": {
+          "port": 3
+        }
+      }
+    ],
+    "MyIngress.ingress_table_1": [
+      {
+        "match": {
+          "hdr.proto1.protocol": 144
+        },
+        "action": "MyIngress.table1_action0",
+        "action_params": {
+          "port": 1
+        }
+      },
+      {
+        "match": {
+          "hdr.proto1.protocol": 145
+        },
+        "action": "MyIngress.table1_action1",
+        "action_params": {
+          "port": 2
+        }
+      },
+      {
+        "match": {
+          "hdr.proto1.protocol": 146
+        },
+        "action": "MyIngress.table1_action2",
+        "action_params": {
+          "port": 3
+        }
+      }
+    ],
+    "MyIngress.ingress_table_2": [
+      {
+        "match": {
+          "hdr.proto2.protocol": 144
+        },
+        "action": "MyIngress.table2_action0",
+        "action_params": {
+          "port": 1
+        }
+      },
+      {
+        "match": {
+          "hdr.proto2.protocol": 145
+        },
+        "action": "MyIngress.table2_action1",
+        "action_params": {
+          "port": 2
+        }
+      },
+      {
+        "match": {
+          "hdr.proto2.protocol": 146
+        },
+        "action": "MyIngress.table2_action2",
+        "action_params": {
+          "port": 3
+        }
+      }
+    ],
+    "MyEgress.egress_table_0": [
+      {
+        "match": {
+          "standard_metadata.egress_port": 1
+        },
+        "action": "MyEgress.egress_table0_action1",
+        "action_params": {
+          "mac": 257
+        }
+      },
+      {
+        "match": {
+          "standard_metadata.egress_port": 2
+        },
+        "action": "MyEgress.egress_table0_action2",
+        "action_params": {
+          "mac": 258
+        }
+      },
+      {
+        "match": {
+          "standard_metadata.egress_port": 3
+        },
+        "action": "MyEgress.egress_table0_action0",
+        "action_params": {
+          "mac": 259
+        }
+      }
+    ],
+    "MyEgress.egress_table_1": [
+      {
+        "match": {
+          "standard_metadata.egress_port": 1
+        },
+        "action": "MyEgress.egress_table1_action1",
+        "action_params": {
+          "mac": 257
+        }
+      },
+      {
+        "match": {
+          "standard_metadata.egress_port": 2
+        },
+        "action": "MyEgress.egress_table1_action2",
+        "action_params": {
+          "mac": 258
+        }
+      },
+      {
+        "match": {
+          "standard_metadata.egress_port": 3
+        },
+        "action": "MyEgress.egress_table1_action0",
+        "action_params": {
+          "mac": 259
+        }
+      }
+    ]
+  },
+  "s2": {
+    "MyIngress.ingress_table_0": [
+      {
+        "match": {
+          "hdr.proto0.protocol": 144
+        },
+        "action": "MyIngress.table0_action0",
+        "action_params": {
+          "port": 1
+        }
+      },
+      {
+        "match": {
+          "hdr.proto0.protocol": 145
+        },
+        "action": "MyIngress.table0_action1",
+        "action_params": {
+          "port": 2
+        }
+      },
+      {
+        "match": {
+          "hdr.proto0.protocol": 146
+        },
+        "action": "MyIngress.table0_action2",
+        "action_params": {
+          "port": 3
+        }
+      }
+    ],
+    "MyIngress.ingress_table_1": [
+      {
+        "match": {
+          "hdr.proto1.protocol": 144
+        },
+        "action": "MyIngress.table1_action0",
+        "action_params": {
+          "port": 1
+        }
+      },
+      {
+        "match": {
+          "hdr.proto1.protocol": 145
+        },
+        "action": "MyIngress.table1_action1",
+        "action_params": {
+          "port": 2
+        }
+      },
+      {
+        "match": {
+          "hdr.proto1.protocol": 146
+        },
+        "action": "MyIngress.table1_action2",
+        "action_params": {
+          "port": 3
+        }
+      }
+    ],
+    "MyIngress.ingress_table_2": [
+      {
+        "match": {
+          "hdr.proto2.protocol": 144
+        },
+        "action": "MyIngress.table2_action0",
+        "action_params": {
+          "port": 1
+        }
+      },
+      {
+        "match": {
+          "hdr.proto2.protocol": 145
+        },
+        "action": "MyIngress.table2_action1",
+        "action_params": {
+          "port": 2
+        }
+      },
+      {
+        "match": {
+          "hdr.proto2.protocol": 146
+        },
+        "action": "MyIngress.table2_action2",
+        "action_params": {
+          "port": 3
+        }
+      }
+    ],
+    "MyEgress.egress_table_0": [
+      {
+        "match": {
+          "standard_metadata.egress_port": 1
+        },
+        "action": "MyEgress.egress_table0_action1",
+        "action_params": {
+          "mac": 513
+        }
+      },
+      {
+        "match": {
+          "standard_metadata.egress_port": 2
+        },
+        "action": "MyEgress.egress_table0_action2",
+        "action_params": {
+          "mac": 514
+        }
+      },
+      {
+        "match": {
+          "standard_metadata.egress_port": 3
+        },
+        "action": "MyEgress.egress_table0_action0",
+        "action_params": {
+          "mac": 515
+        }
+      }
+    ],
+    "MyEgress.egress_table_1": [
+      {
+        "match": {
+          "standard_metadata.egress_port": 1
+        },
+        "action": "MyEgress.egress_table1_action1",
+        "action_params": {
+          "mac": 513
+        }
+      },
+      {
+        "match": {
+          "standard_metadata.egress_port": 2
+        },
+        "action": "MyEgress.egress_table1_action2",
+        "action_params": {
+          "mac": 514
+        }
+      },
+      {
+        "match": {
+          "standard_metadata.egress_port": 3
+        },
+        "action": "MyEgress.egress_table1_action0",
+        "action_params": {
+          "mac": 515
+        }
+      }
+    ]
+  },
+  "s3": {
+    "MyIngress.ingress_table_0": [
+      {
+        "match": {
+          "hdr.proto0.protocol": 144
+        },
+        "action": "MyIngress.table0_action0",
+        "action_params": {
+          "port": 1
+        }
+      },
+      {
+        "match": {
+          "hdr.proto0.protocol": 145
+        },
+        "action": "MyIngress.table0_action1",
+        "action_params": {
+          "port": 2
+        }
+      },
+      {
+        "match": {
+          "hdr.proto0.protocol": 146
+        },
+        "action": "MyIngress.table0_action2",
+        "action_params": {
+          "port": 3
+        }
+      }
+    ],
+    "MyIngress.ingress_table_1": [
+      {
+        "match": {
+          "hdr.proto1.protocol": 144
+        },
+        "action": "MyIngress.table1_action0",
+        "action_params": {
+          "port": 1
+        }
+      },
+      {
+        "match": {
+          "hdr.proto1.protocol": 145
+        },
+        "action": "MyIngress.table1_action1",
+        "action_params": {
+          "port": 2
+        }
+      },
+      {
+        "match": {
+          "hdr.proto1.protocol": 146
+        },
+        "action": "MyIngress.table1_action2",
+        "action_params": {
+          "port": 3
+        }
+      }
+    ],
+    "MyIngress.ingress_table_2": [
+      {
+        "match": {
+          "hdr.proto2.protocol": 144
+        },
+        "action": "MyIngress.table2_action0",
+        "action_params": {
+          "port": 1
+        }
+      },
+      {
+        "match": {
+          "hdr.proto2.protocol": 145
+        },
+        "action": "MyIngress.table2_action1",
+        "action_params": {
+          "port": 2
+        }
+      },
+      {
+        "match": {
+          "hdr.proto2.protocol": 146
+        },
+        "action": "MyIngress.table2_action2",
+        "action_params": {
+          "port": 3
+        }
+      }
+    ],
+    "MyEgress.egress_table_0": [
+      {
+        "match": {
+          "standard_metadata.egress_port": 1
+        },
+        "action": "MyEgress.egress_table0_action1",
+        "action_params": {
+          "mac": 769
+        }
+      },
+      {
+        "match": {
+          "standard_metadata.egress_port": 2
+        },
+        "action": "MyEgress.egress_table0_action2",
+        "action_params": {
+          "mac": 770
+        }
+      },
+      {
+        "match": {
+          "standard_metadata.egress_port": 3
+        },
+        "action": "MyEgress.egress_table0_action0",
+        "action_params": {
+          "mac": 771
+        }
+      }
+    ],
+    "MyEgress.egress_table_1": [
+      {
+        "match": {
+          "standard_metadata.egress_port": 1
+        },
+        "action": "MyEgress.egress_table1_action1",
+        "action_params": {
+          "mac": 769
+        }
+      },
+      {
+        "match": {
+          "standard_metadata.egress_port": 2
+        },
+        "action": "MyEgress.egress_table1_action2",
+        "action_params": {
+          "mac": 770
+        }
+      },
+      {
+        "match": {
+          "standard_metadata.egress_port": 3
+        },
+        "action": "MyEgress.egress_table1_action0",
+        "action_params": {
+          "mac": 771
+        }
+      }
+    ]
+  }
+}

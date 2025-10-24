@@ -1,0 +1,30 @@
+[
+  {
+    "id": "synth_p3_i2_e1",
+    "p4_file": "/app/benchmark/synthetic_programs/synth_p3_i2_e1.p4",
+    "topology_file": "/app/benchmark/synthetic_programs/synth_p3_i2_e1_topology.json",
+    "runtime_file": "/app/benchmark/synthetic_programs/synth_p3_i2_e1_runtime.json",
+    "config": {
+      "parser_states": 3,
+      "ingress_tables": 2,
+      "egress_tables": 1,
+      "headers_per_state": 1,
+      "actions_per_table": 2,
+      "total_headers": 4
+    }
+  },
+  {
+    "id": "synth_p5_i3_e2",
+    "p4_file": "/app/benchmark/synthetic_programs/synth_p5_i3_e2.p4",
+    "topology_file": "/app/benchmark/synthetic_programs/synth_p5_i3_e2_topology.json",
+    "runtime_file": "/app/benchmark/synthetic_programs/synth_p5_i3_e2_runtime.json",
+    "config": {
+      "parser_states": 5,
+      "ingress_tables": 3,
+      "egress_tables": 2,
+      "headers_per_state": 1,
+      "actions_per_table": 3,
+      "total_headers": 6
+    }
+  }
+]

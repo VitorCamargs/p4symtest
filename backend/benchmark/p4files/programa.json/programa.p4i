@@ -1,9 +1,8 @@
-# 1 "/app/workspace/p4files/programa.p4"
+# 1 "/app/benchmark/p4files/programa.p4"
 # 1 "<built-in>"
 # 1 "<command-line>"
-# 1 "/app/workspace/p4files/programa.p4"
-// SPDX-License-Identifier: Apache-2.0
-/* -*- P4_16 -*- */
+# 1 "/app/benchmark/p4files/programa.p4"
+/* Synthetic P4 Program: synth_p5_i3_e2 */
 # 1 "/usr/local/share/p4c/p4include/core.p4" 1
 /*
 Copyright 2013-present Barefoot Networks, Inc.
@@ -98,7 +97,7 @@ extern bool static_assert(bool check, string message);
 
 /// Like the above but using a default message.
 extern bool static_assert(bool check);
-# 4 "/app/workspace/p4files/programa.p4" 2
+# 3 "/app/benchmark/p4files/programa.p4" 2
 # 1 "/usr/local/share/p4c/p4include/v1model.p4" 1
 /*
 Copyright 2013-present Barefoot Networks, Inc.
@@ -884,19 +883,11 @@ package V1Switch<H, M>(Parser<H, M> p,
                        ComputeChecksum<H, M> ck,
                        Deparser<H> dep
                        );
-# 5 "/app/workspace/p4files/programa.p4" 2
+# 4 "/app/benchmark/p4files/programa.p4" 2
 
-const bit<16> TYPE_MYTUNNEL = 0x1212;
-const bit<16> TYPE_IPV4 = 0x800;
+const bit<16> TYPE_ETHERNET = 0x0800;
 
-/*************************************************************************
-
-*********************** H E A D E R S  ***********************************
-
-*************************************************************************/
-# 13 "/app/workspace/p4files/programa.p4"
-typedef bit<9> egressSpec_t; // Usado no ingress para indicar porta de saída
-typedef bit<9> egressPort_t; // Usado no egress (standard_metadata.egress_port)
+/* HEADERS */
 typedef bit<48> macAddr_t;
 typedef bit<32> ip4Addr_t;
 
@@ -906,256 +897,309 @@ header ethernet_t {
     bit<16> etherType;
 }
 
-header myTunnel_t {
-    bit<16> proto_id;
-    bit<16> dst_id;
+header proto0_t {
+    bit<16> protocol;
+    bit<16> field1;
+    bit<32> field2;
 }
 
-header ipv4_t {
-    bit<4> version;
-    bit<4> ihl;
-    bit<8> diffserv;
-    bit<16> totalLen;
-    bit<16> identification;
-    bit<3> flags;
-    bit<13> fragOffset;
-    bit<8> ttl;
-    bit<8> protocol;
-    bit<16> hdrChecksum;
-    ip4Addr_t srcAddr;
-    ip4Addr_t dstAddr;
+header proto1_t {
+    bit<16> protocol;
+    bit<16> field1;
+    bit<32> field2;
+}
+
+header proto2_t {
+    bit<16> protocol;
+    bit<16> field1;
+    bit<32> field2;
+}
+
+header proto3_t {
+    bit<16> protocol;
+    bit<16> field1;
+    bit<32> field2;
+}
+
+header proto4_t {
+    bit<16> protocol;
+    bit<16> field1;
+    bit<32> field2;
 }
 
 struct metadata {
-    /* Você pode adicionar metadados aqui se precisar passar
-
-       informações do ingress para o egress que não estejam
-
-       nos headers ou standard_metadata. */
-# 48 "/app/workspace/p4files/programa.p4"
+    bit<8> stage0;
+    bit<8> stage1;
+    bit<8> stage2;
+    bit<8> stage3;
+    bit<8> stage4;
+    bit<8> stage5;
+    bit<8> egress_stage0;
+    bit<8> egress_stage1;
+    bit<8> egress_stage2;
+    bit<8> egress_stage3;
 }
 
 struct headers {
     ethernet_t ethernet;
-    myTunnel_t myTunnel;
-    ipv4_t ipv4;
+    proto0_t proto0;
+    proto1_t proto1;
+    proto2_t proto2;
+    proto3_t proto3;
+    proto4_t proto4;
 }
 
-/*************************************************************************
-
-*********************** P A R S E R  ***********************************
-
-*************************************************************************/
-# 60 "/app/workspace/p4files/programa.p4"
 parser MyParser(packet_in packet,
-                out headers hdr,
-                inout metadata meta,
-                inout standard_metadata_t standard_metadata) {
+                  out headers hdr,
+                  inout metadata meta,
+                  inout standard_metadata_t standard_metadata) {
 
     state start {
-        transition parse_ethernet;
-    }
-
-    state parse_ethernet {
         packet.extract(hdr.ethernet);
         transition select(hdr.ethernet.etherType) {
-            TYPE_MYTUNNEL: parse_myTunnel;
-            TYPE_IPV4: parse_ipv4;
+            0x8000: parse_state_0;
+            0x8001: parse_state_1;
+            0x8002: parse_state_2;
             default: accept;
         }
     }
 
-    state parse_myTunnel {
-        packet.extract(hdr.myTunnel);
-        transition select(hdr.myTunnel.proto_id) {
-            TYPE_IPV4: parse_ipv4;
+    state parse_state_0 {
+        packet.extract(hdr.proto0);
+        transition select(hdr.proto0.protocol) {
+            0x90: parse_state_1;
             default: accept;
         }
     }
 
-    state parse_ipv4 {
-        packet.extract(hdr.ipv4);
+    state parse_state_1 {
+        packet.extract(hdr.proto1);
+        transition select(hdr.proto1.protocol) {
+            0x91: parse_state_2;
+            default: accept;
+        }
+    }
+
+    state parse_state_2 {
+        packet.extract(hdr.proto2);
+        transition select(hdr.proto2.protocol) {
+            0x92: parse_state_3;
+            default: accept;
+        }
+    }
+
+    state parse_state_3 {
+        packet.extract(hdr.proto3);
         transition accept;
     }
 
 }
 
-/*************************************************************************
-
-************ C H E C K S U M    V E R I F I C A T I O N   *************
-
-*************************************************************************/
-# 97 "/app/workspace/p4files/programa.p4"
 control MyVerifyChecksum(inout headers hdr, inout metadata meta) {
     apply { }
 }
 
-
-/*************************************************************************
-
-************** I N G R E S S   P R O C E S S I N G   *******************
-
-*************************************************************************/
-# 106 "/app/workspace/p4files/programa.p4"
 control MyIngress(inout headers hdr,
-                  inout metadata meta,
-                  inout standard_metadata_t standard_metadata) {
+                       inout metadata meta,
+                       inout standard_metadata_t standard_metadata) {
+
     action drop() {
         mark_to_drop(standard_metadata);
     }
 
-    action ipv4_forward(macAddr_t dstAddr, egressSpec_t port) {
-        // Define a porta de saída física
+    action table0_action0(bit<9> port) {
         standard_metadata.egress_spec = port;
-        // Prepara L2 para o próximo hop (será sobrescrito no egress se necessário)
-        hdr.ethernet.srcAddr = hdr.ethernet.dstAddr; // Temporário, será reescrito no Egress
-        hdr.ethernet.dstAddr = dstAddr;
-        // Decrementa TTL
-        hdr.ipv4.ttl = hdr.ipv4.ttl - 1;
+        meta.stage0 = 0;
     }
 
-    table ipv4_lpm {
+    action table0_action1(bit<9> port) {
+        standard_metadata.egress_spec = port;
+        meta.stage0 = 1;
+    }
+
+    action table0_action2(bit<9> port) {
+        standard_metadata.egress_spec = port;
+        meta.stage0 = 2;
+    }
+
+    action table1_action0(bit<9> port) {
+        standard_metadata.egress_spec = port;
+        meta.stage1 = 0;
+    }
+
+    action table1_action1(bit<9> port) {
+        standard_metadata.egress_spec = port;
+        meta.stage1 = 1;
+    }
+
+    action table1_action2(bit<9> port) {
+        standard_metadata.egress_spec = port;
+        meta.stage1 = 2;
+    }
+
+    action table2_action0(bit<9> port) {
+        standard_metadata.egress_spec = port;
+        meta.stage2 = 0;
+    }
+
+    action table2_action1(bit<9> port) {
+        standard_metadata.egress_spec = port;
+        meta.stage2 = 1;
+    }
+
+    action table2_action2(bit<9> port) {
+        standard_metadata.egress_spec = port;
+        meta.stage2 = 2;
+    }
+
+    table ingress_table_0 {
         key = {
-            hdr.ipv4.dstAddr: lpm;
+            hdr.proto0.protocol: exact;
         }
         actions = {
-            ipv4_forward;
+            table0_action0;
+            table0_action1;
+            table0_action2;
             drop;
-            NoAction; // Caso não queira modificar nada
+            NoAction;
         }
         size = 1024;
-        default_action = drop(); // Descarta se não houver rota
+        default_action = NoAction();
     }
 
-    action myTunnel_forward(egressSpec_t port) {
-        standard_metadata.egress_spec = port;
-        // Note: Para túneis, geralmente não se modifica L2/L3 interno no ingress
-    }
-
-    table myTunnel_exact {
+    table ingress_table_1 {
         key = {
-            hdr.myTunnel.dst_id: exact;
+            hdr.proto1.protocol: exact;
         }
         actions = {
-            myTunnel_forward;
+            table1_action0;
+            table1_action1;
+            table1_action2;
             drop;
+            NoAction;
         }
         size = 1024;
-        default_action = drop();
+        default_action = NoAction();
     }
 
-    apply {
-        // Verifica se TTL expirou
-
-        if (hdr.ipv4.isValid() && !hdr.myTunnel.isValid()) {
-            // Processa pacotes IPv4 não tunelados
-            ipv4_lpm.apply();
-        }
-
-        if (hdr.myTunnel.isValid()) {
-            // Processa pacotes tunelados
-            myTunnel_exact.apply();
-        }
-
-        // Se nenhuma tabela foi aplicada ou resultou em NoAction,
-        // o pacote pode prosseguir com egress_spec indefinido (pode ser dropado depois)
-        // ou você pode definir um drop explícito aqui se preferir.
-        // if (standard_metadata.egress_spec == 0) { drop(); } // Exemplo opcional
-    }
-}
-
-/*************************************************************************
-
-**************** E G R E S S   P R O C E S S I N G   *******************
-
-*************************************************************************/
-# 177 "/app/workspace/p4files/programa.p4"
-control MyEgress(inout headers hdr,
-                 inout metadata meta,
-                 inout standard_metadata_t standard_metadata) {
-
-    // Ação para reescrever o MAC de origem baseado na porta de saída
-    action rewrite_src_mac(macAddr_t smac) {
-        hdr.ethernet.srcAddr = smac;
-    }
-
-    // Tabela que mapeia a porta de saída física para o MAC de origem a ser usado
-    table egress_port_smac {
+    table ingress_table_2 {
         key = {
-            // standard_metadata.egress_port contém a porta física final
-            standard_metadata.egress_port: exact;
+            hdr.proto2.protocol: exact;
         }
         actions = {
-            rewrite_src_mac;
-            NoAction; // Se não precisar reescrever para alguma porta
+            table2_action0;
+            table2_action1;
+            table2_action2;
+            drop;
+            NoAction;
         }
-        size = 256; // Ajuste conforme necessário
-        // A ação padrão pode ser não fazer nada ou usar um MAC default
+        size = 1024;
         default_action = NoAction();
     }
 
     apply {
-        // Aplica a tabela para reescrever o MAC de origem
-        // Somente se o header Ethernet for válido (será emitido)
-        if (hdr.ethernet.isValid()) {
-             egress_port_smac.apply();
+        if (hdr.proto0.isValid()) {
+            ingress_table_0.apply();
+        } else if (hdr.proto1.isValid() && meta.stage0 != 0) {
+            ingress_table_1.apply();
+        } else if (hdr.proto2.isValid() && meta.stage1 != 0) {
+            ingress_table_2.apply();
         }
     }
 }
 
-/*************************************************************************
+control MyEgress(inout headers hdr,
+                      inout metadata meta,
+                      inout standard_metadata_t standard_metadata) {
 
-************* C H E C K S U M    C O M P U T A T I O N   **************
+    action egress_table0_action0(bit<48> mac) {
+        hdr.ethernet.srcAddr = mac;
+        meta.egress_stage0 = 0;
+    }
 
-*************************************************************************/
-# 214 "/app/workspace/p4files/programa.p4"
-control MyComputeChecksum(inout headers hdr, inout metadata meta) {
-     apply {
-        // Recalcula checksum IPv4 (TTL foi modificado no ingress)
-        update_checksum(
-            hdr.ipv4.isValid(),
-            { hdr.ipv4.version,
-              hdr.ipv4.ihl,
-              hdr.ipv4.diffserv,
-              hdr.ipv4.totalLen,
-              hdr.ipv4.identification,
-              hdr.ipv4.flags,
-              hdr.ipv4.fragOffset,
-              hdr.ipv4.ttl,
-              hdr.ipv4.protocol,
-              hdr.ipv4.srcAddr,
-              hdr.ipv4.dstAddr },
-            hdr.ipv4.hdrChecksum,
-            HashAlgorithm.csum16);
+    action egress_table0_action1(bit<48> mac) {
+        hdr.ethernet.srcAddr = mac;
+        meta.egress_stage0 = 1;
+    }
+
+    action egress_table0_action2(bit<48> mac) {
+        hdr.ethernet.srcAddr = mac;
+        meta.egress_stage0 = 2;
+    }
+
+    action egress_table1_action0(bit<48> mac) {
+        hdr.ethernet.srcAddr = mac;
+        meta.egress_stage1 = 0;
+    }
+
+    action egress_table1_action1(bit<48> mac) {
+        hdr.ethernet.srcAddr = mac;
+        meta.egress_stage1 = 1;
+    }
+
+    action egress_table1_action2(bit<48> mac) {
+        hdr.ethernet.srcAddr = mac;
+        meta.egress_stage1 = 2;
+    }
+
+    table egress_table_0 {
+        key = {
+            standard_metadata.egress_port: exact;
+        }
+        actions = {
+            egress_table0_action0;
+            egress_table0_action1;
+            egress_table0_action2;
+            NoAction;
+        }
+        size = 256;
+        default_action = NoAction();
+    }
+
+    table egress_table_1 {
+        key = {
+            standard_metadata.egress_port: exact;
+        }
+        actions = {
+            egress_table1_action0;
+            egress_table1_action1;
+            egress_table1_action2;
+            NoAction;
+        }
+        size = 256;
+        default_action = NoAction();
+    }
+
+    apply {
+        if (hdr.ethernet.isValid()) {
+            egress_table_0.apply();
+        if (meta.egress_stage0 != 0) {
+            egress_table_1.apply();
+        }
+        }
     }
 }
 
-/*************************************************************************
+control MyComputeChecksum(inout headers hdr, inout metadata meta) {
+    apply { }
+}
 
-*********************** D E P A R S E R  *******************************
-
-*************************************************************************/
-# 239 "/app/workspace/p4files/programa.p4"
 control MyDeparser(packet_out packet, in headers hdr) {
     apply {
-        // Emite os headers na ordem correta, se forem válidos
         packet.emit(hdr.ethernet);
-        packet.emit(hdr.myTunnel); // Só emite se myTunnel.isValid()
-        packet.emit(hdr.ipv4); // Só emite se ipv4.isValid()
+        packet.emit(hdr.proto0);
+        packet.emit(hdr.proto1);
+        packet.emit(hdr.proto2);
+        packet.emit(hdr.proto3);
+        packet.emit(hdr.proto4);
     }
 }
 
-/*************************************************************************
-
-*********************** S W I T C H  *******************************
-
-*************************************************************************/
-# 252 "/app/workspace/p4files/programa.p4"
 V1Switch(
-MyParser(),
-MyVerifyChecksum(),
-MyIngress(),
-MyEgress(),
-MyComputeChecksum(),
-MyDeparser() // <<--- VÍRGULA REMOVIDA DAQUI
+    MyParser(),
+    MyVerifyChecksum(),
+    MyIngress(),
+    MyEgress(),
+    MyComputeChecksum(),
+    MyDeparser()
 ) main;

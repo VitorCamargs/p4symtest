@@ -1,0 +1,19 @@
+# Requisitos para Framework de Benchmark P4SymTest
+# Instalar com: pip install -r requirements_benchmark.txt
+
+# Análise e processamento de dados
+pandas>=1.5.0
+numpy>=1.23.0
+
+# Visualização
+matplotlib>=3.6.0
+seaborn>=0.12.0
+
+# Monitoramento de sistema
+psutil>=5.9.0
+
+# Dependências já presentes no projeto base
+# (listadas aqui para referência)
+# z3-solver>=4.12.0
+# Flask>=2.3.0
+# flask-cors>=4.0.0

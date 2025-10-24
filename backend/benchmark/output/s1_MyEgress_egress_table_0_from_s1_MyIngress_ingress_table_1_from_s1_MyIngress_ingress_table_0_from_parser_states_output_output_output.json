@@ -1,0 +1,109 @@
+[
+  {
+    "description": "start [extract ethernet] -> parse_state_0 [extract proto0] -> parse_state_1 [extract proto1] -> MyIngress.ingress_table_0 -> MyEgress.egress_table_0",
+    "z3_constraints_smt2": [
+      "(= ethernet.etherType #x8000)",
+      "(= proto0.protocol #x0090)",
+      "(= standard_metadata.$valid$ #b0)",
+      "(= ethernet.$valid$ #b1)",
+      "(= proto0.$valid$ #b1)",
+      "(= proto1.$valid$ #b1)",
+      "(= proto2.$valid$ #b0)",
+      "(distinct (ite (= proto0.protocol #x0090)\n               #b000000001\n               (ite (= proto0.protocol #x0091)\n                    #b000000010\n                    standard_metadata.egress_spec))\n          #b111111111)"
+    ],
+    "present_headers": [
+      "ethernet",
+      "proto0",
+      "proto1"
+    ],
+    "history": [
+      "Parser",
+      "MyIngress.ingress_table_0",
+      "MyEgress.egress_table_0"
+    ],
+    "field_updates": {
+      "scalars.metadata.stage0": "(ite (= proto0.protocol #x0090)\n     #x00\n     (ite (= proto0.protocol #x0091) #x01 scalars.metadata.stage0))",
+      "standard_metadata.egress_spec": "(ite (= proto0.protocol #x0090)\n     #b000000001\n     (ite (= proto0.protocol #x0091) #b000000010 standard_metadata.egress_spec))",
+      "ethernet.srcAddr": "(ite (= standard_metadata.egress_port #b000000001)\n     #x000000000101\n     (ite (= standard_metadata.egress_port #b000000010)\n          #x000000000102\n          (ite (= standard_metadata.egress_port #b000000011)\n               #x000000000103\n               ethernet.srcAddr)))",
+      "scalars.metadata.egress_stage0": "#x00000000"
+    }
+  },
+  {
+    "description": "start [extract ethernet] -> parse_state_0 [extract proto0] -> MyIngress.ingress_table_0 -> MyEgress.egress_table_0",
+    "z3_constraints_smt2": [
+      "(= ethernet.etherType #x8000)",
+      "(not (= proto0.protocol #x0090))",
+      "(= standard_metadata.$valid$ #b0)",
+      "(= ethernet.$valid$ #b1)",
+      "(= proto0.$valid$ #b1)",
+      "(= proto1.$valid$ #b0)",
+      "(= proto2.$valid$ #b0)",
+      "(distinct (ite (= proto0.protocol #x0090)\n               #b000000001\n               (ite (= proto0.protocol #x0091)\n                    #b000000010\n                    standard_metadata.egress_spec))\n          #b111111111)"
+    ],
+    "present_headers": [
+      "ethernet",
+      "proto0"
+    ],
+    "history": [
+      "Parser",
+      "MyIngress.ingress_table_0",
+      "MyEgress.egress_table_0"
+    ],
+    "field_updates": {
+      "scalars.metadata.stage0": "(ite (= proto0.protocol #x0090)\n     #x00\n     (ite (= proto0.protocol #x0091) #x01 scalars.metadata.stage0))",
+      "standard_metadata.egress_spec": "(ite (= proto0.protocol #x0090)\n     #b000000001\n     (ite (= proto0.protocol #x0091) #b000000010 standard_metadata.egress_spec))",
+      "ethernet.srcAddr": "(ite (= standard_metadata.egress_port #b000000001)\n     #x000000000101\n     (ite (= standard_metadata.egress_port #b000000010)\n          #x000000000102\n          (ite (= standard_metadata.egress_port #b000000011)\n               #x000000000103\n               ethernet.srcAddr)))",
+      "scalars.metadata.egress_stage0": "#x00000000"
+    }
+  },
+  {
+    "description": "start [extract ethernet] -> parse_state_1 [extract proto1] -> MyIngress.ingress_table_1 -> MyEgress.egress_table_0",
+    "z3_constraints_smt2": [
+      "(= ethernet.etherType #x8001)",
+      "(= standard_metadata.$valid$ #b0)",
+      "(= ethernet.$valid$ #b1)",
+      "(= proto0.$valid$ #b0)",
+      "(= proto1.$valid$ #b1)",
+      "(= proto2.$valid$ #b0)",
+      "(distinct (ite (= proto1.protocol #x0090)\n               #b000000001\n               (ite (= proto1.protocol #x0091)\n                    #b000000010\n                    standard_metadata.egress_spec))\n          #b111111111)"
+    ],
+    "present_headers": [
+      "ethernet",
+      "proto1"
+    ],
+    "history": [
+      "Parser",
+      "MyIngress.ingress_table_1",
+      "MyEgress.egress_table_0"
+    ],
+    "field_updates": {
+      "scalars.metadata.stage1": "(ite (= proto1.protocol #x0090)\n     #x00\n     (ite (= proto1.protocol #x0091) #x01 scalars.metadata.stage1))",
+      "standard_metadata.egress_spec": "(ite (= proto1.protocol #x0090)\n     #b000000001\n     (ite (= proto1.protocol #x0091) #b000000010 standard_metadata.egress_spec))",
+      "ethernet.srcAddr": "(ite (= standard_metadata.egress_port #b000000001)\n     #x000000000101\n     (ite (= standard_metadata.egress_port #b000000010)\n          #x000000000102\n          (ite (= standard_metadata.egress_port #b000000011)\n               #x000000000103\n               ethernet.srcAddr)))",
+      "scalars.metadata.egress_stage0": "#x00000000"
+    }
+  },
+  {
+    "description": "start [extract ethernet] -> MyEgress.egress_table_0",
+    "z3_constraints_smt2": [
+      "(not (= ethernet.etherType #x8000))",
+      "(not (= ethernet.etherType #x8001))",
+      "(= standard_metadata.$valid$ #b0)",
+      "(= ethernet.$valid$ #b1)",
+      "(= proto0.$valid$ #b0)",
+      "(= proto1.$valid$ #b0)",
+      "(= proto2.$valid$ #b0)"
+    ],
+    "present_headers": [
+      "ethernet"
+    ],
+    "history": [
+      "Parser",
+      "MyEgress.egress_table_0"
+    ],
+    "field_updates": {
+      "ethernet.srcAddr": "(ite (= standard_metadata.egress_port #b000000001)\n     #x000000000101\n     (ite (= standard_metadata.egress_port #b000000010)\n          #x000000000102\n          (ite (= standard_metadata.egress_port #b000000011)\n               #x000000000103\n               ethernet.srcAddr)))",
+      "scalars.metadata.egress_stage0": "#x00000000"
+    }
+  }
+]

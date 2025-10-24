@@ -1,4 +1,4 @@
-# run_parser.py (Versão Corrigida - sem scalars.$valid$)
+# run_parser.py (Versão Corrigida - aceita FSM como argumento)
 import json
 import sys
 from z3 import *
@@ -91,11 +91,17 @@ def explore_parser(state_name, path_desc_list, path_conditions, extracted_header
             explore_parser(next_state, new_path_desc, final_path_conditions, new_extracted_headers)
 
 if __name__ == "__main__":
-    if len(sys.argv) != 2:
-        print("Uso: python3 run_parser.py <arquivo_de_saida.json>"); exit(1)
-    output_file = sys.argv[1]
+    # --- CORREÇÃO ---
+    # Agora esperamos 2 argumentos: <fsm_json_entrada> <arquivo_de_saida.json>
+    if len(sys.argv) != 3:
+        print("Uso: python3 run_parser.py <fsm_json_entrada> <arquivo_de_saida.json>"); exit(1)
+    
+    fsm_file = sys.argv[1]
+    output_file = sys.argv[2]
 
-    fsm_data = load_json("programa.json") # Assume o nome do arquivo fsm
+    # --- CORREÇÃO ---
+    # Carrega o arquivo FSM passado como argumento
+    fsm_data = load_json(fsm_file)
     parser_results = []
     
     fields = {}
@@ -109,7 +115,7 @@ if __name__ == "__main__":
         if h['name'] != 'scalars':
             fields[(h['name'], '$valid$')] = BitVec(f"{h['name']}.$valid$", 1)
     
-    print("--- Iniciando análise simbólica do Parser ---")
+    print(f"--- Iniciando análise simbólica do Parser ({fsm_file}) ---")
     parser_initial_state = fsm_data['parsers'][0]['init_state']
     explore_parser(parser_initial_state, [], [], set())
     

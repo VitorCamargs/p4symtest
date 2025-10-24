@@ -1,0 +1,56 @@
+{
+  "hosts": {
+    "h1": {
+      "ip": "10.0.0.1",
+      "mac": "00:00:00:00:01:01",
+      "conectado_a": "s1-eth1"
+    },
+    "h2": {
+      "ip": "10.0.0.2",
+      "mac": "00:00:00:00:02:02",
+      "conectado_a": "s2-eth1"
+    },
+    "h3": {
+      "ip": "10.0.0.3",
+      "mac": "00:00:00:00:03:03",
+      "conectado_a": "s3-eth1"
+    }
+  },
+  "switches": {
+    "s1": {
+      "portas": {
+        "s1-eth1": 1,
+        "s1-eth2": 2,
+        "s1-eth3": 3
+      }
+    },
+    "s2": {
+      "portas": {
+        "s2-eth1": 1,
+        "s2-eth2": 2,
+        "s2-eth3": 3
+      }
+    },
+    "s3": {
+      "portas": {
+        "s3-eth1": 1,
+        "s1-eth2": 2,
+        "s3-eth3": 3
+      }
+    }
+  },
+  "links": [
+    {
+      "from": "s1-eth2",
+      "to": "s2-eth2"
+    },
+    {
+      "from": "s1-eth3",
+      "to": "s3-eth2"
+    },
+    {
+      "from": "s2-eth3",
+      "to": "s3-eth3"
+    }
+  ]
+}

@@ -1,0 +1,508 @@
+[
+  {
+    "input_state": "start [extract ethernet] -> parse_state_0 [extract proto0] -> parse_state_1 [extract proto1] -> parse_state_2 [extract proto2] -> parse_state_3 [extract proto3] -> MyIngress.ingress_table_0 -> MyEgress.egress_table_0 -> MyEgress.egress_table_1",
+    "input_state_index": 0,
+    "history": [
+      "Parser",
+      "MyIngress.ingress_table_0",
+      "MyEgress.egress_table_0",
+      "MyEgress.egress_table_1"
+    ],
+    "full_constraints_smt2": [
+      "(= ethernet.etherType #x8000)",
+      "(= proto0.protocol #x0090)",
+      "(= proto1.protocol #x0091)",
+      "(= proto2.protocol #x0092)",
+      "(= standard_metadata.$valid$ #b0)",
+      "(= ethernet.$valid$ #b1)",
+      "(= proto0.$valid$ #b1)",
+      "(= proto1.$valid$ #b1)",
+      "(= proto2.$valid$ #b1)",
+      "(= proto3.$valid$ #b1)",
+      "(= proto4.$valid$ #b0)",
+      "(let ((a!1 (ite (= proto0.protocol #x0090)\n                #b000000001\n                (ite (= proto0.protocol #x0091)\n                     #b000000010\n                     (ite (= proto0.protocol #x0092)\n                          #b000000011\n                          standard_metadata.egress_spec)))))\n  (distinct a!1 #b111111111))"
+    ],
+    "non_drop_condition_smt": "(distinct (ite (= proto0.protocol #x0090)\n     #b000000001\n     (ite (= proto0.protocol #x0091)\n          #b000000010\n          (ite (= proto0.protocol #x0092)\n               #b000000011\n               standard_metadata.egress_spec))) #x1ff)",
+    "satisfiable": true,
+    "emission_status": [
+      {
+        "header": "ethernet",
+        "status": "Sempre"
+      },
+      {
+        "header": "proto0",
+        "status": "Sempre"
+      },
+      {
+        "header": "proto1",
+        "status": "Sempre"
+      },
+      {
+        "header": "proto2",
+        "status": "Sempre"
+      },
+      {
+        "header": "proto3",
+        "status": "Sempre"
+      },
+      {
+        "header": "proto4",
+        "status": "Nunca"
+      }
+    ]
+  },
+  {
+    "input_state": "start [extract ethernet] -> parse_state_0 [extract proto0] -> parse_state_1 [extract proto1] -> parse_state_2 [extract proto2] -> MyIngress.ingress_table_0 -> MyEgress.egress_table_0 -> MyEgress.egress_table_1",
+    "input_state_index": 1,
+    "history": [
+      "Parser",
+      "MyIngress.ingress_table_0",
+      "MyEgress.egress_table_0",
+      "MyEgress.egress_table_1"
+    ],
+    "full_constraints_smt2": [
+      "(= ethernet.etherType #x8000)",
+      "(= proto0.protocol #x0090)",
+      "(= proto1.protocol #x0091)",
+      "(not (= proto2.protocol #x0092))",
+      "(= standard_metadata.$valid$ #b0)",
+      "(= ethernet.$valid$ #b1)",
+      "(= proto0.$valid$ #b1)",
+      "(= proto1.$valid$ #b1)",
+      "(= proto2.$valid$ #b1)",
+      "(= proto3.$valid$ #b0)",
+      "(= proto4.$valid$ #b0)",
+      "(let ((a!1 (ite (= proto0.protocol #x0090)\n                #b000000001\n                (ite (= proto0.protocol #x0091)\n                     #b000000010\n                     (ite (= proto0.protocol #x0092)\n                          #b000000011\n                          standard_metadata.egress_spec)))))\n  (distinct a!1 #b111111111))"
+    ],
+    "non_drop_condition_smt": "(distinct (ite (= proto0.protocol #x0090)\n     #b000000001\n     (ite (= proto0.protocol #x0091)\n          #b000000010\n          (ite (= proto0.protocol #x0092)\n               #b000000011\n               standard_metadata.egress_spec))) #x1ff)",
+    "satisfiable": true,
+    "emission_status": [
+      {
+        "header": "ethernet",
+        "status": "Sempre"
+      },
+      {
+        "header": "proto0",
+        "status": "Sempre"
+      },
+      {
+        "header": "proto1",
+        "status": "Sempre"
+      },
+      {
+        "header": "proto2",
+        "status": "Sempre"
+      },
+      {
+        "header": "proto3",
+        "status": "Nunca"
+      },
+      {
+        "header": "proto4",
+        "status": "Nunca"
+      }
+    ]
+  },
+  {
+    "input_state": "start [extract ethernet] -> parse_state_0 [extract proto0] -> parse_state_1 [extract proto1] -> MyIngress.ingress_table_0 -> MyEgress.egress_table_0 -> MyEgress.egress_table_1",
+    "input_state_index": 2,
+    "history": [
+      "Parser",
+      "MyIngress.ingress_table_0",
+      "MyEgress.egress_table_0",
+      "MyEgress.egress_table_1"
+    ],
+    "full_constraints_smt2": [
+      "(= ethernet.etherType #x8000)",
+      "(= proto0.protocol #x0090)",
+      "(not (= proto1.protocol #x0091))",
+      "(= standard_metadata.$valid$ #b0)",
+      "(= ethernet.$valid$ #b1)",
+      "(= proto0.$valid$ #b1)",
+      "(= proto1.$valid$ #b1)",
+      "(= proto2.$valid$ #b0)",
+      "(= proto3.$valid$ #b0)",
+      "(= proto4.$valid$ #b0)",
+      "(let ((a!1 (ite (= proto0.protocol #x0090)\n                #b000000001\n                (ite (= proto0.protocol #x0091)\n                     #b000000010\n                     (ite (= proto0.protocol #x0092)\n                          #b000000011\n                          standard_metadata.egress_spec)))))\n  (distinct a!1 #b111111111))"
+    ],
+    "non_drop_condition_smt": "(distinct (ite (= proto0.protocol #x0090)\n     #b000000001\n     (ite (= proto0.protocol #x0091)\n          #b000000010\n          (ite (= proto0.protocol #x0092)\n               #b000000011\n               standard_metadata.egress_spec))) #x1ff)",
+    "satisfiable": true,
+    "emission_status": [
+      {
+        "header": "ethernet",
+        "status": "Sempre"
+      },
+      {
+        "header": "proto0",
+        "status": "Sempre"
+      },
+      {
+        "header": "proto1",
+        "status": "Sempre"
+      },
+      {
+        "header": "proto2",
+        "status": "Nunca"
+      },
+      {
+        "header": "proto3",
+        "status": "Nunca"
+      },
+      {
+        "header": "proto4",
+        "status": "Nunca"
+      }
+    ]
+  },
+  {
+    "input_state": "start [extract ethernet] -> parse_state_0 [extract proto0] -> MyIngress.ingress_table_0 -> MyEgress.egress_table_0 -> MyEgress.egress_table_1",
+    "input_state_index": 3,
+    "history": [
+      "Parser",
+      "MyIngress.ingress_table_0",
+      "MyEgress.egress_table_0",
+      "MyEgress.egress_table_1"
+    ],
+    "full_constraints_smt2": [
+      "(= ethernet.etherType #x8000)",
+      "(not (= proto0.protocol #x0090))",
+      "(= standard_metadata.$valid$ #b0)",
+      "(= ethernet.$valid$ #b1)",
+      "(= proto0.$valid$ #b1)",
+      "(= proto1.$valid$ #b0)",
+      "(= proto2.$valid$ #b0)",
+      "(= proto3.$valid$ #b0)",
+      "(= proto4.$valid$ #b0)",
+      "(let ((a!1 (ite (= proto0.protocol #x0090)\n                #b000000001\n                (ite (= proto0.protocol #x0091)\n                     #b000000010\n                     (ite (= proto0.protocol #x0092)\n                          #b000000011\n                          standard_metadata.egress_spec)))))\n  (distinct a!1 #b111111111))"
+    ],
+    "non_drop_condition_smt": "(distinct (ite (= proto0.protocol #x0090)\n     #b000000001\n     (ite (= proto0.protocol #x0091)\n          #b000000010\n          (ite (= proto0.protocol #x0092)\n               #b000000011\n               standard_metadata.egress_spec))) #x1ff)",
+    "satisfiable": true,
+    "emission_status": [
+      {
+        "header": "ethernet",
+        "status": "Sempre"
+      },
+      {
+        "header": "proto0",
+        "status": "Sempre"
+      },
+      {
+        "header": "proto1",
+        "status": "Nunca"
+      },
+      {
+        "header": "proto2",
+        "status": "Nunca"
+      },
+      {
+        "header": "proto3",
+        "status": "Nunca"
+      },
+      {
+        "header": "proto4",
+        "status": "Nunca"
+      }
+    ]
+  },
+  {
+    "input_state": "start [extract ethernet] -> parse_state_1 [extract proto1] -> parse_state_2 [extract proto2] -> parse_state_3 [extract proto3] -> MyIngress.ingress_table_1 -> MyEgress.egress_table_0 -> MyEgress.egress_table_1",
+    "input_state_index": 4,
+    "history": [
+      "Parser",
+      "MyIngress.ingress_table_1",
+      "MyEgress.egress_table_0",
+      "MyEgress.egress_table_1"
+    ],
+    "full_constraints_smt2": [
+      "(= ethernet.etherType #x8001)",
+      "(= proto1.protocol #x0091)",
+      "(= proto2.protocol #x0092)",
+      "(= standard_metadata.$valid$ #b0)",
+      "(= ethernet.$valid$ #b1)",
+      "(= proto0.$valid$ #b0)",
+      "(= proto1.$valid$ #b1)",
+      "(= proto2.$valid$ #b1)",
+      "(= proto3.$valid$ #b1)",
+      "(= proto4.$valid$ #b0)",
+      "(let ((a!1 (ite (= proto1.protocol #x0090)\n                #b000000001\n                (ite (= proto1.protocol #x0091)\n                     #b000000010\n                     (ite (= proto1.protocol #x0092)\n                          #b000000011\n                          standard_metadata.egress_spec)))))\n  (distinct a!1 #b111111111))"
+    ],
+    "non_drop_condition_smt": "(distinct (ite (= proto1.protocol #x0090)\n     #b000000001\n     (ite (= proto1.protocol #x0091)\n          #b000000010\n          (ite (= proto1.protocol #x0092)\n               #b000000011\n               standard_metadata.egress_spec))) #x1ff)",
+    "satisfiable": true,
+    "emission_status": [
+      {
+        "header": "ethernet",
+        "status": "Sempre"
+      },
+      {
+        "header": "proto0",
+        "status": "Nunca"
+      },
+      {
+        "header": "proto1",
+        "status": "Sempre"
+      },
+      {
+        "header": "proto2",
+        "status": "Sempre"
+      },
+      {
+        "header": "proto3",
+        "status": "Sempre"
+      },
+      {
+        "header": "proto4",
+        "status": "Nunca"
+      }
+    ]
+  },
+  {
+    "input_state": "start [extract ethernet] -> parse_state_1 [extract proto1] -> parse_state_2 [extract proto2] -> MyIngress.ingress_table_1 -> MyEgress.egress_table_0 -> MyEgress.egress_table_1",
+    "input_state_index": 5,
+    "history": [
+      "Parser",
+      "MyIngress.ingress_table_1",
+      "MyEgress.egress_table_0",
+      "MyEgress.egress_table_1"
+    ],
+    "full_constraints_smt2": [
+      "(= ethernet.etherType #x8001)",
+      "(= proto1.protocol #x0091)",
+      "(not (= proto2.protocol #x0092))",
+      "(= standard_metadata.$valid$ #b0)",
+      "(= ethernet.$valid$ #b1)",
+      "(= proto0.$valid$ #b0)",
+      "(= proto1.$valid$ #b1)",
+      "(= proto2.$valid$ #b1)",
+      "(= proto3.$valid$ #b0)",
+      "(= proto4.$valid$ #b0)",
+      "(let ((a!1 (ite (= proto1.protocol #x0090)\n                #b000000001\n                (ite (= proto1.protocol #x0091)\n                     #b000000010\n                     (ite (= proto1.protocol #x0092)\n                          #b000000011\n                          standard_metadata.egress_spec)))))\n  (distinct a!1 #b111111111))"
+    ],
+    "non_drop_condition_smt": "(distinct (ite (= proto1.protocol #x0090)\n     #b000000001\n     (ite (= proto1.protocol #x0091)\n          #b000000010\n          (ite (= proto1.protocol #x0092)\n               #b000000011\n               standard_metadata.egress_spec))) #x1ff)",
+    "satisfiable": true,
+    "emission_status": [
+      {
+        "header": "ethernet",
+        "status": "Sempre"
+      },
+      {
+        "header": "proto0",
+        "status": "Nunca"
+      },
+      {
+        "header": "proto1",
+        "status": "Sempre"
+      },
+      {
+        "header": "proto2",
+        "status": "Sempre"
+      },
+      {
+        "header": "proto3",
+        "status": "Nunca"
+      },
+      {
+        "header": "proto4",
+        "status": "Nunca"
+      }
+    ]
+  },
+  {
+    "input_state": "start [extract ethernet] -> parse_state_1 [extract proto1] -> MyIngress.ingress_table_1 -> MyEgress.egress_table_0 -> MyEgress.egress_table_1",
+    "input_state_index": 6,
+    "history": [
+      "Parser",
+      "MyIngress.ingress_table_1",
+      "MyEgress.egress_table_0",
+      "MyEgress.egress_table_1"
+    ],
+    "full_constraints_smt2": [
+      "(= ethernet.etherType #x8001)",
+      "(not (= proto1.protocol #x0091))",
+      "(= standard_metadata.$valid$ #b0)",
+      "(= ethernet.$valid$ #b1)",
+      "(= proto0.$valid$ #b0)",
+      "(= proto1.$valid$ #b1)",
+      "(= proto2.$valid$ #b0)",
+      "(= proto3.$valid$ #b0)",
+      "(= proto4.$valid$ #b0)",
+      "(let ((a!1 (ite (= proto1.protocol #x0090)\n                #b000000001\n                (ite (= proto1.protocol #x0091)\n                     #b000000010\n                     (ite (= proto1.protocol #x0092)\n                          #b000000011\n                          standard_metadata.egress_spec)))))\n  (distinct a!1 #b111111111))"
+    ],
+    "non_drop_condition_smt": "(distinct (ite (= proto1.protocol #x0090)\n     #b000000001\n     (ite (= proto1.protocol #x0091)\n          #b000000010\n          (ite (= proto1.protocol #x0092)\n               #b000000011\n               standard_metadata.egress_spec))) #x1ff)",
+    "satisfiable": true,
+    "emission_status": [
+      {
+        "header": "ethernet",
+        "status": "Sempre"
+      },
+      {
+        "header": "proto0",
+        "status": "Nunca"
+      },
+      {
+        "header": "proto1",
+        "status": "Sempre"
+      },
+      {
+        "header": "proto2",
+        "status": "Nunca"
+      },
+      {
+        "header": "proto3",
+        "status": "Nunca"
+      },
+      {
+        "header": "proto4",
+        "status": "Nunca"
+      }
+    ]
+  },
+  {
+    "input_state": "start [extract ethernet] -> parse_state_2 [extract proto2] -> parse_state_3 [extract proto3] -> MyIngress.ingress_table_2 -> MyEgress.egress_table_0 -> MyEgress.egress_table_1",
+    "input_state_index": 7,
+    "history": [
+      "Parser",
+      "MyIngress.ingress_table_2",
+      "MyEgress.egress_table_0",
+      "MyEgress.egress_table_1"
+    ],
+    "full_constraints_smt2": [
+      "(= ethernet.etherType #x8002)",
+      "(= proto2.protocol #x0092)",
+      "(= standard_metadata.$valid$ #b0)",
+      "(= ethernet.$valid$ #b1)",
+      "(= proto0.$valid$ #b0)",
+      "(= proto1.$valid$ #b0)",
+      "(= proto2.$valid$ #b1)",
+      "(= proto3.$valid$ #b1)",
+      "(= proto4.$valid$ #b0)",
+      "(let ((a!1 (ite (= proto2.protocol #x0090)\n                #b000000001\n                (ite (= proto2.protocol #x0091)\n                     #b000000010\n                     (ite (= proto2.protocol #x0092)\n                          #b000000011\n                          standard_metadata.egress_spec)))))\n  (distinct a!1 #b111111111))"
+    ],
+    "non_drop_condition_smt": "(distinct (ite (= proto2.protocol #x0090)\n     #b000000001\n     (ite (= proto2.protocol #x0091)\n          #b000000010\n          (ite (= proto2.protocol #x0092)\n               #b000000011\n               standard_metadata.egress_spec))) #x1ff)",
+    "satisfiable": true,
+    "emission_status": [
+      {
+        "header": "ethernet",
+        "status": "Sempre"
+      },
+      {
+        "header": "proto0",
+        "status": "Nunca"
+      },
+      {
+        "header": "proto1",
+        "status": "Nunca"
+      },
+      {
+        "header": "proto2",
+        "status": "Sempre"
+      },
+      {
+        "header": "proto3",
+        "status": "Sempre"
+      },
+      {
+        "header": "proto4",
+        "status": "Nunca"
+      }
+    ]
+  },
+  {
+    "input_state": "start [extract ethernet] -> parse_state_2 [extract proto2] -> MyIngress.ingress_table_2 -> MyEgress.egress_table_0 -> MyEgress.egress_table_1",
+    "input_state_index": 8,
+    "history": [
+      "Parser",
+      "MyIngress.ingress_table_2",
+      "MyEgress.egress_table_0",
+      "MyEgress.egress_table_1"
+    ],
+    "full_constraints_smt2": [
+      "(= ethernet.etherType #x8002)",
+      "(not (= proto2.protocol #x0092))",
+      "(= standard_metadata.$valid$ #b0)",
+      "(= ethernet.$valid$ #b1)",
+      "(= proto0.$valid$ #b0)",
+      "(= proto1.$valid$ #b0)",
+      "(= proto2.$valid$ #b1)",
+      "(= proto3.$valid$ #b0)",
+      "(= proto4.$valid$ #b0)",
+      "(let ((a!1 (ite (= proto2.protocol #x0090)\n                #b000000001\n                (ite (= proto2.protocol #x0091)\n                     #b000000010\n                     (ite (= proto2.protocol #x0092)\n                          #b000000011\n                          standard_metadata.egress_spec)))))\n  (distinct a!1 #b111111111))"
+    ],
+    "non_drop_condition_smt": "(distinct (ite (= proto2.protocol #x0090)\n     #b000000001\n     (ite (= proto2.protocol #x0091)\n          #b000000010\n          (ite (= proto2.protocol #x0092)\n               #b000000011\n               standard_metadata.egress_spec))) #x1ff)",
+    "satisfiable": true,
+    "emission_status": [
+      {
+        "header": "ethernet",
+        "status": "Sempre"
+      },
+      {
+        "header": "proto0",
+        "status": "Nunca"
+      },
+      {
+        "header": "proto1",
+        "status": "Nunca"
+      },
+      {
+        "header": "proto2",
+        "status": "Sempre"
+      },
+      {
+        "header": "proto3",
+        "status": "Nunca"
+      },
+      {
+        "header": "proto4",
+        "status": "Nunca"
+      }
+    ]
+  },
+  {
+    "input_state": "start [extract ethernet] -> MyEgress.egress_table_0 -> MyEgress.egress_table_1",
+    "input_state_index": 9,
+    "history": [
+      "Parser",
+      "MyEgress.egress_table_0",
+      "MyEgress.egress_table_1"
+    ],
+    "full_constraints_smt2": [
+      "(not (= ethernet.etherType #x8000))",
+      "(not (= ethernet.etherType #x8001))",
+      "(not (= ethernet.etherType #x8002))",
+      "(= standard_metadata.$valid$ #b0)",
+      "(= ethernet.$valid$ #b1)",
+      "(= proto0.$valid$ #b0)",
+      "(= proto1.$valid$ #b0)",
+      "(= proto2.$valid$ #b0)",
+      "(= proto3.$valid$ #b0)",
+      "(= proto4.$valid$ #b0)"
+    ],
+    "non_drop_condition_smt": null,
+    "satisfiable": true,
+    "emission_status": [
+      {
+        "header": "ethernet",
+        "status": "Sempre"
+      },
+      {
+        "header": "proto0",
+        "status": "Nunca"
+      },
+      {
+        "header": "proto1",
+        "status": "Nunca"
+      },
+      {
+        "header": "proto2",
+        "status": "Nunca"
+      },
+      {
+        "header": "proto3",
+        "status": "Nunca"
+      },
+      {
+        "header": "proto4",
+        "status": "Nunca"
+      }
+    ]
+  }
+]
