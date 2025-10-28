@@ -23,8 +23,6 @@ class SyntheticP4Generator:
                          egress_tables: int = 2,
                          headers_per_state: int = 1,
                          actions_per_table: int = 3,
-                         ingress_logic_type: str = 'sequential', # <--- NOVO
-                         prog_id_suffix: str = "",                  # <--- NOVO
                          output_dir: Path = Path("./synthetic_programs")) -> Dict:
         """
         Gera um programa P4 sintético completo
@@ -35,8 +33,6 @@ class SyntheticP4Generator:
             egress_tables: Número de tabelas no pipeline egress
             headers_per_state: Headers extraídos por estado do parser
             actions_per_table: Ações por tabela
-            ingress_logic_type: 'sequential' (if/else if) ou 'parallel' (if; if)
-            prog_id_suffix: Sufixo para adicionar ao ID do programa
             output_dir: Diretório de saída
             
         Returns:
@@ -45,14 +41,12 @@ class SyntheticP4Generator:
         output_dir.mkdir(parents=True, exist_ok=True)
         
         # Gera identificador único
-        prog_id = f"synth_p{parser_states}_i{ingress_tables}_e{egress_tables}{prog_id_suffix}"
+        prog_id = f"synth_p{parser_states}_i{ingress_tables}_e{egress_tables}"
         
         # Gera componentes
         headers = self._generate_headers(parser_states, headers_per_state)
         parser_code = self._generate_parser(parser_states, headers_per_state)
-        ingress_code = self._generate_ingress(
-            ingress_tables, actions_per_table, headers, ingress_logic_type # <--- Passa o logic_type
-        )
+        ingress_code = self._generate_ingress(ingress_tables, actions_per_table, headers)
         egress_code = self._generate_egress(egress_tables, actions_per_table)
         deparser_code = self._generate_deparser(headers)
         
@@ -92,7 +86,6 @@ class SyntheticP4Generator:
                 "egress_tables": egress_tables,
                 "headers_per_state": headers_per_state,
                 "actions_per_table": actions_per_table,
-                "ingress_logic_type": ingress_logic_type, # <--- NOVO
                 "total_headers": len(headers)
             }
         }
@@ -153,8 +146,7 @@ class SyntheticP4Generator:
         code += "}\n"
         return code
     
-    def _generate_ingress(self, tables: int, actions: int, headers: List[str],
-                          logic_type: str = 'sequential') -> str: # <--- NOVO PARÂMETRO
+    def _generate_ingress(self, tables: int, actions: int, headers: List[str]) -> str:
         """Gera pipeline ingress com múltiplas tabelas"""
         code = """control MyIngress(inout headers hdr,
                        inout metadata meta,
@@ -197,40 +189,20 @@ class SyntheticP4Generator:
     
 """
         
-        # --- LÓGICA DO APPLY ATUALIZADA ---
+        # Gera lógica apply com condicionais
         code += "    apply {\n"
-        
-        if logic_type == 'sequential':
-            # Lógica antiga: if / else if (mutuamente exclusivo)
-            for t in range(tables):
-                key_header = headers[min(t + 1, len(headers) - 1)]
-                
-                if t == 0:
-                    code += f"        if (hdr.{key_header}.isValid()) {{\n"
-                    code += f"            ingress_table_{t}.apply();\n"
-                else:
-                    # Cria dependência da tabela anterior
-                    code += f"        }} else if (hdr.{key_header}.isValid() && meta.stage{t-1} != 0) {{\n"
-                    code += f"            ingress_table_{t}.apply();\n"
+        for t in range(tables):
+            key_header = headers[min(t + 1, len(headers) - 1)]
             
-            if tables > 0:
-                code += "        }\n" # Fecha o último bloco if/else
-        
-        elif logic_type == 'parallel':
-            # Lógica nova: if; if; if (múltiplas tabelas podem rodar)
-            for t in range(tables):
-                key_header = headers[min(t + 1, len(headers) - 1)]
-                
-                # Cada tabela tem seu próprio IF independente
-                # Removemos a dependência de 'meta.stage{t-1}'
+            if t == 0:
                 code += f"        if (hdr.{key_header}.isValid()) {{\n"
                 code += f"            ingress_table_{t}.apply();\n"
-                code += "        }\n" # Fecha cada bloco if
+            else:
+                # Cria dependência da tabela anterior
+                code += f"        }} else if (hdr.{key_header}.isValid() && meta.stage{t-1} != 0) {{\n"
+                code += f"            ingress_table_{t}.apply();\n"
         
-        else:
-            raise ValueError(f"Tipo de lógica ingress desconhecida: {logic_type}")
-
-        code += "    }\n}\n"
+        code += "        }\n    }\n}\n"
         return code
     
     def _generate_egress(self, tables: int, actions: int) -> str:
@@ -419,16 +391,9 @@ header ethernet_t {{
                 config[switch][table_name] = []
                 
                 # Cria entradas para alguns protocols
-                key_header_index = min(t + 1, (self.ethertype_base + ingress_tables * 1) - 1) # Ajuste para usar o header certo
-                
                 for protocol in range(min(actions_per_table, 5)):
-                    # Ajusta qual header.protocol usar
-                    proto_hdr = f"proto{t}" # Simplificação: tabela N usa protoN
-                    if key_header_index > (len(self._generate_headers(ingress_tables, 1)) - 1):
-                         proto_hdr = "proto0" # Fallback
-
                     entry = {
-                        "match": {f"hdr.{proto_hdr}.protocol": self.protocol_base + protocol},
+                        "match": {f"hdr.proto{t}.protocol": self.protocol_base + protocol},
                         "action": f"MyIngress.table{t}_action{protocol % actions_per_table}",
                         "action_params": {"port": (protocol % 3) + 1}
                     }
@@ -470,30 +435,14 @@ if __name__ == "__main__":
     
     print("Gerando programas P4 sintéticos...")
     for parser_states, ingress_tables, egress_tables in test_configs:
-        
-        # 1. Versão Sequencial (antiga)
-        metadata_seq = generator.generate_program(
+        metadata = generator.generate_program(
             parser_states=parser_states,
             ingress_tables=ingress_tables,
             egress_tables=egress_tables,
-            ingress_logic_type='sequential', # Padrão
-            prog_id_suffix="_seq",
             output_dir=output_dir
         )
-        manifest.append(metadata_seq)
-        print(f"✓ Gerado (Sequential): {metadata_seq['id']}")
-        
-        # 2. Versão "Paralela" (nova)
-        metadata_par = generator.generate_program(
-            parser_states=parser_states,
-            ingress_tables=ingress_tables,
-            egress_tables=egress_tables,
-            ingress_logic_type='parallel', # Nova opção
-            prog_id_suffix="_par",
-            output_dir=output_dir
-        )
-        manifest.append(metadata_par)
-        print(f"✓ Gerado (Parallel):   {metadata_par['id']}")
+        manifest.append(metadata)
+        print(f"✓ Gerado: {metadata['id']}")
     
     # Salva manifest
     manifest_file = output_dir / "manifest.json"
