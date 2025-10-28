@@ -1,260 +1,718 @@
-// SPDX-License-Identifier: Apache-2.0
-/* -*- P4_16 -*- */
+/* Parser Benchmark Program */
 #include <core.p4>
 #include <v1model.p4>
 
-const bit<16> TYPE_MYTUNNEL = 0x1212;
-const bit<16> TYPE_IPV4 = 0x800;
-
-/*************************************************************************
-*********************** H E A D E R S  ***********************************
-*************************************************************************/
-
-typedef bit<9>  egressSpec_t; // Usado no ingress para indicar porta de saída
-typedef bit<9>  egressPort_t; // Usado no egress (standard_metadata.egress_port)
 typedef bit<48> macAddr_t;
 typedef bit<32> ip4Addr_t;
 
+/* HEADERS */
 header ethernet_t {
     macAddr_t dstAddr;
     macAddr_t srcAddr;
-    bit<16>   etherType;
+    bit<16> etherType;
 }
 
-header myTunnel_t {
-    bit<16> proto_id;
-    bit<16> dst_id;
+header proto_0_t {
+    bit<16> protocol;
+    bit<16> next_proto;
+    bit<32> data;
 }
 
-header ipv4_t {
-    bit<4>    version;
-    bit<4>    ihl;
-    bit<8>    diffserv;
-    bit<16>   totalLen;
-    bit<16>   identification;
-    bit<3>    flags;
-    bit<13>   fragOffset;
-    bit<8>    ttl;
-    bit<8>    protocol;
-    bit<16>   hdrChecksum;
-    ip4Addr_t srcAddr;
-    ip4Addr_t dstAddr;
+header proto_1_t {
+    bit<16> protocol;
+    bit<16> next_proto;
+    bit<32> data;
 }
 
-struct metadata {
-    /* Você pode adicionar metadados aqui se precisar passar
-       informações do ingress para o egress que não estejam
-       nos headers ou standard_metadata. */
+header proto_2_t {
+    bit<16> protocol;
+    bit<16> next_proto;
+    bit<32> data;
+}
+
+header proto_3_t {
+    bit<16> protocol;
+    bit<16> next_proto;
+    bit<32> data;
+}
+
+header proto_4_t {
+    bit<16> protocol;
+    bit<16> next_proto;
+    bit<32> data;
+}
+
+header proto_5_t {
+    bit<16> protocol;
+    bit<16> next_proto;
+    bit<32> data;
+}
+
+header proto_6_t {
+    bit<16> protocol;
+    bit<16> next_proto;
+    bit<32> data;
+}
+
+header proto_7_t {
+    bit<16> protocol;
+    bit<16> next_proto;
+    bit<32> data;
+}
+
+header proto_8_t {
+    bit<16> protocol;
+    bit<16> next_proto;
+    bit<32> data;
+}
+
+header proto_9_t {
+    bit<16> protocol;
+    bit<16> next_proto;
+    bit<32> data;
+}
+
+header proto_10_t {
+    bit<16> protocol;
+    bit<16> next_proto;
+    bit<32> data;
+}
+
+header proto_11_t {
+    bit<16> protocol;
+    bit<16> next_proto;
+    bit<32> data;
+}
+
+header proto_12_t {
+    bit<16> protocol;
+    bit<16> next_proto;
+    bit<32> data;
+}
+
+header proto_13_t {
+    bit<16> protocol;
+    bit<16> next_proto;
+    bit<32> data;
+}
+
+header proto_14_t {
+    bit<16> protocol;
+    bit<16> next_proto;
+    bit<32> data;
+}
+
+header proto_15_t {
+    bit<16> protocol;
+    bit<16> next_proto;
+    bit<32> data;
+}
+
+header proto_16_t {
+    bit<16> protocol;
+    bit<16> next_proto;
+    bit<32> data;
+}
+
+header proto_17_t {
+    bit<16> protocol;
+    bit<16> next_proto;
+    bit<32> data;
+}
+
+header proto_18_t {
+    bit<16> protocol;
+    bit<16> next_proto;
+    bit<32> data;
+}
+
+header proto_19_t {
+    bit<16> protocol;
+    bit<16> next_proto;
+    bit<32> data;
+}
+
+header proto_20_t {
+    bit<16> protocol;
+    bit<16> next_proto;
+    bit<32> data;
+}
+
+header proto_21_t {
+    bit<16> protocol;
+    bit<16> next_proto;
+    bit<32> data;
+}
+
+header proto_22_t {
+    bit<16> protocol;
+    bit<16> next_proto;
+    bit<32> data;
+}
+
+header proto_23_t {
+    bit<16> protocol;
+    bit<16> next_proto;
+    bit<32> data;
+}
+
+header proto_24_t {
+    bit<16> protocol;
+    bit<16> next_proto;
+    bit<32> data;
+}
+
+header proto_25_t {
+    bit<16> protocol;
+    bit<16> next_proto;
+    bit<32> data;
+}
+
+header proto_26_t {
+    bit<16> protocol;
+    bit<16> next_proto;
+    bit<32> data;
+}
+
+header proto_27_t {
+    bit<16> protocol;
+    bit<16> next_proto;
+    bit<32> data;
+}
+
+header proto_28_t {
+    bit<16> protocol;
+    bit<16> next_proto;
+    bit<32> data;
+}
+
+header proto_29_t {
+    bit<16> protocol;
+    bit<16> next_proto;
+    bit<32> data;
+}
+
+header proto_30_t {
+    bit<16> protocol;
+    bit<16> next_proto;
+    bit<32> data;
+}
+
+header proto_31_t {
+    bit<16> protocol;
+    bit<16> next_proto;
+    bit<32> data;
+}
+
+header proto_32_t {
+    bit<16> protocol;
+    bit<16> next_proto;
+    bit<32> data;
+}
+
+header proto_33_t {
+    bit<16> protocol;
+    bit<16> next_proto;
+    bit<32> data;
+}
+
+header proto_34_t {
+    bit<16> protocol;
+    bit<16> next_proto;
+    bit<32> data;
+}
+
+header proto_35_t {
+    bit<16> protocol;
+    bit<16> next_proto;
+    bit<32> data;
+}
+
+header proto_36_t {
+    bit<16> protocol;
+    bit<16> next_proto;
+    bit<32> data;
+}
+
+header proto_37_t {
+    bit<16> protocol;
+    bit<16> next_proto;
+    bit<32> data;
+}
+
+header proto_38_t {
+    bit<16> protocol;
+    bit<16> next_proto;
+    bit<32> data;
+}
+
+header proto_39_t {
+    bit<16> protocol;
+    bit<16> next_proto;
+    bit<32> data;
 }
 
 struct headers {
-    ethernet_t   ethernet;
-    myTunnel_t   myTunnel;
-    ipv4_t       ipv4;
+    ethernet_t ethernet;
+    proto_0_t proto_0;
+    proto_1_t proto_1;
+    proto_2_t proto_2;
+    proto_3_t proto_3;
+    proto_4_t proto_4;
+    proto_5_t proto_5;
+    proto_6_t proto_6;
+    proto_7_t proto_7;
+    proto_8_t proto_8;
+    proto_9_t proto_9;
+    proto_10_t proto_10;
+    proto_11_t proto_11;
+    proto_12_t proto_12;
+    proto_13_t proto_13;
+    proto_14_t proto_14;
+    proto_15_t proto_15;
+    proto_16_t proto_16;
+    proto_17_t proto_17;
+    proto_18_t proto_18;
+    proto_19_t proto_19;
+    proto_20_t proto_20;
+    proto_21_t proto_21;
+    proto_22_t proto_22;
+    proto_23_t proto_23;
+    proto_24_t proto_24;
+    proto_25_t proto_25;
+    proto_26_t proto_26;
+    proto_27_t proto_27;
+    proto_28_t proto_28;
+    proto_29_t proto_29;
+    proto_30_t proto_30;
+    proto_31_t proto_31;
+    proto_32_t proto_32;
+    proto_33_t proto_33;
+    proto_34_t proto_34;
+    proto_35_t proto_35;
+    proto_36_t proto_36;
+    proto_37_t proto_37;
+    proto_38_t proto_38;
+    proto_39_t proto_39;
 }
 
-/*************************************************************************
-*********************** P A R S E R  ***********************************
-*************************************************************************/
+struct metadata { }
 
 parser MyParser(packet_in packet,
-                out headers hdr,
-                inout metadata meta,
-                inout standard_metadata_t standard_metadata) {
+                  out headers hdr,
+                  inout metadata meta,
+                  inout standard_metadata_t standard_metadata) {
 
     state start {
-        transition parse_ethernet;
-    }
-
-    state parse_ethernet {
         packet.extract(hdr.ethernet);
         transition select(hdr.ethernet.etherType) {
-            TYPE_MYTUNNEL: parse_myTunnel;
-            TYPE_IPV4: parse_ipv4;
+            0x8000: parse_state_0_0;
+            0x8001: parse_state_0_1;
             default: accept;
         }
     }
 
-    state parse_myTunnel {
-        packet.extract(hdr.myTunnel);
-        transition select(hdr.myTunnel.proto_id) {
-            TYPE_IPV4: parse_ipv4;
+    state parse_state_0_0 {
+        packet.extract(hdr.proto_0);
+        transition select(hdr.proto_0.next_proto) {
+            0x1000: parse_state_1_0;
+            0x1001: parse_state_1_1;
             default: accept;
         }
     }
 
-    state parse_ipv4 {
-        packet.extract(hdr.ipv4);
+    state parse_state_1_0 {
+        packet.extract(hdr.proto_1);
+        transition select(hdr.proto_1.next_proto) {
+            0x1064: parse_state_2_0;
+            0x1065: parse_state_2_1;
+            default: accept;
+        }
+    }
+
+    state parse_state_1_1 {
+        packet.extract(hdr.proto_2);
+        transition select(hdr.proto_2.next_proto) {
+            0x1064: parse_state_2_2;
+            0x1065: parse_state_2_3;
+            default: accept;
+        }
+    }
+
+    state parse_state_2_0 {
+        packet.extract(hdr.proto_3);
+        transition select(hdr.proto_3.next_proto) {
+            0x10c8: parse_state_3_0;
+            0x10c9: parse_state_3_1;
+            default: accept;
+        }
+    }
+
+    state parse_state_2_1 {
+        packet.extract(hdr.proto_4);
+        transition select(hdr.proto_4.next_proto) {
+            0x10c8: parse_state_3_2;
+            0x10c9: parse_state_3_3;
+            default: accept;
+        }
+    }
+
+    state parse_state_3_0 {
+        packet.extract(hdr.proto_5);
+        transition select(hdr.proto_5.next_proto) {
+            0x112c: parse_state_4_0;
+            0x112d: parse_state_4_1;
+            default: accept;
+        }
+    }
+
+    state parse_state_3_1 {
+        packet.extract(hdr.proto_6);
+        transition select(hdr.proto_6.next_proto) {
+            0x112c: parse_state_4_2;
+            0x112d: parse_state_4_3;
+            default: accept;
+        }
+    }
+
+    state parse_state_4_0 {
+        packet.extract(hdr.proto_7);
+        transition select(hdr.proto_7.next_proto) {
+            0x1190: parse_state_5_0;
+            0x1191: parse_state_5_1;
+            default: accept;
+        }
+    }
+
+    state parse_state_4_1 {
+        packet.extract(hdr.proto_8);
+        transition select(hdr.proto_8.next_proto) {
+            0x1190: parse_state_5_2;
+            0x1191: parse_state_5_3;
+            default: accept;
+        }
+    }
+
+    state parse_state_5_0 {
+        packet.extract(hdr.proto_9);
+        transition select(hdr.proto_9.next_proto) {
+            0x11f4: parse_state_6_0;
+            0x11f5: parse_state_6_1;
+            default: accept;
+        }
+    }
+
+    state parse_state_5_1 {
+        packet.extract(hdr.proto_10);
+        transition select(hdr.proto_10.next_proto) {
+            0x11f4: parse_state_6_2;
+            0x11f5: parse_state_6_3;
+            default: accept;
+        }
+    }
+
+    state parse_state_6_0 {
+        packet.extract(hdr.proto_11);
+        transition select(hdr.proto_11.next_proto) {
+            0x1258: parse_state_7_0;
+            0x1259: parse_state_7_1;
+            default: accept;
+        }
+    }
+
+    state parse_state_6_1 {
+        packet.extract(hdr.proto_12);
+        transition select(hdr.proto_12.next_proto) {
+            0x1258: parse_state_7_2;
+            0x1259: parse_state_7_3;
+            default: accept;
+        }
+    }
+
+    state parse_state_7_0 {
+        packet.extract(hdr.proto_13);
+        transition select(hdr.proto_13.next_proto) {
+            0x12bc: parse_state_8_0;
+            0x12bd: parse_state_8_1;
+            default: accept;
+        }
+    }
+
+    state parse_state_7_1 {
+        packet.extract(hdr.proto_14);
+        transition select(hdr.proto_14.next_proto) {
+            0x12bc: parse_state_8_2;
+            0x12bd: parse_state_8_3;
+            default: accept;
+        }
+    }
+
+    state parse_state_8_0 {
+        packet.extract(hdr.proto_15);
+        transition select(hdr.proto_15.next_proto) {
+            0x1320: parse_state_9_0;
+            0x1321: parse_state_9_1;
+            default: accept;
+        }
+    }
+
+    state parse_state_8_1 {
+        packet.extract(hdr.proto_16);
+        transition select(hdr.proto_16.next_proto) {
+            0x1320: parse_state_9_2;
+            0x1321: parse_state_9_3;
+            default: accept;
+        }
+    }
+
+    state parse_state_9_0 {
+        packet.extract(hdr.proto_17);
+        transition select(hdr.proto_17.next_proto) {
+            0x1384: parse_state_10_0;
+            0x1385: parse_state_10_1;
+            default: accept;
+        }
+    }
+
+    state parse_state_9_1 {
+        packet.extract(hdr.proto_18);
+        transition select(hdr.proto_18.next_proto) {
+            0x1384: parse_state_10_2;
+            0x1385: parse_state_10_3;
+            default: accept;
+        }
+    }
+
+    state parse_state_10_0 {
+        packet.extract(hdr.proto_19);
+        transition select(hdr.proto_19.next_proto) {
+            0x13e8: parse_state_11_0;
+            0x13e9: parse_state_11_1;
+            default: accept;
+        }
+    }
+
+    state parse_state_10_1 {
+        packet.extract(hdr.proto_20);
+        transition select(hdr.proto_20.next_proto) {
+            0x13e8: parse_state_11_2;
+            0x13e9: parse_state_11_3;
+            default: accept;
+        }
+    }
+
+    state parse_state_11_0 {
+        packet.extract(hdr.proto_21);
+        transition select(hdr.proto_21.next_proto) {
+            0x144c: parse_state_12_0;
+            0x144d: parse_state_12_1;
+            default: accept;
+        }
+    }
+
+    state parse_state_11_1 {
+        packet.extract(hdr.proto_22);
+        transition select(hdr.proto_22.next_proto) {
+            0x144c: parse_state_12_2;
+            0x144d: parse_state_12_3;
+            default: accept;
+        }
+    }
+
+    state parse_state_12_0 {
+        packet.extract(hdr.proto_23);
+        transition select(hdr.proto_23.next_proto) {
+            0x14b0: parse_state_13_0;
+            0x14b1: parse_state_13_1;
+            default: accept;
+        }
+    }
+
+    state parse_state_12_1 {
+        packet.extract(hdr.proto_24);
+        transition select(hdr.proto_24.next_proto) {
+            0x14b0: parse_state_13_2;
+            0x14b1: parse_state_13_3;
+            default: accept;
+        }
+    }
+
+    state parse_state_13_0 {
+        packet.extract(hdr.proto_25);
+        transition select(hdr.proto_25.next_proto) {
+            0x1514: parse_state_14_0;
+            0x1515: parse_state_14_1;
+            default: accept;
+        }
+    }
+
+    state parse_state_13_1 {
+        packet.extract(hdr.proto_26);
+        transition select(hdr.proto_26.next_proto) {
+            0x1514: parse_state_14_2;
+            0x1515: parse_state_14_3;
+            default: accept;
+        }
+    }
+
+    state parse_state_14_0 {
+        packet.extract(hdr.proto_27);
+        transition select(hdr.proto_27.next_proto) {
+            0x1578: parse_state_15_0;
+            0x1579: parse_state_15_1;
+            default: accept;
+        }
+    }
+
+    state parse_state_14_1 {
+        packet.extract(hdr.proto_28);
+        transition select(hdr.proto_28.next_proto) {
+            0x1578: parse_state_15_2;
+            0x1579: parse_state_15_3;
+            default: accept;
+        }
+    }
+
+    state parse_state_15_0 {
+        packet.extract(hdr.proto_29);
+        transition select(hdr.proto_29.next_proto) {
+            0x15dc: parse_state_16_0;
+            0x15dd: parse_state_16_1;
+            default: accept;
+        }
+    }
+
+    state parse_state_15_1 {
+        packet.extract(hdr.proto_30);
+        transition select(hdr.proto_30.next_proto) {
+            0x15dc: parse_state_16_2;
+            0x15dd: parse_state_16_3;
+            default: accept;
+        }
+    }
+
+    state parse_state_16_0 {
+        packet.extract(hdr.proto_31);
+        transition select(hdr.proto_31.next_proto) {
+            0x1640: parse_state_17_0;
+            0x1641: parse_state_17_1;
+            default: accept;
+        }
+    }
+
+    state parse_state_16_1 {
+        packet.extract(hdr.proto_32);
+        transition select(hdr.proto_32.next_proto) {
+            0x1640: parse_state_17_2;
+            0x1641: parse_state_17_3;
+            default: accept;
+        }
+    }
+
+    state parse_state_17_0 {
+        packet.extract(hdr.proto_33);
+        transition select(hdr.proto_33.next_proto) {
+            0x16a4: parse_state_18_0;
+            0x16a5: parse_state_18_1;
+            default: accept;
+        }
+    }
+
+    state parse_state_17_1 {
+        packet.extract(hdr.proto_34);
+        transition select(hdr.proto_34.next_proto) {
+            0x16a4: parse_state_18_2;
+            0x16a5: parse_state_18_3;
+            default: accept;
+        }
+    }
+
+    state parse_state_18_0 {
+        packet.extract(hdr.proto_35);
+        transition accept;
+    }
+
+    state parse_state_18_1 {
+        packet.extract(hdr.proto_36);
         transition accept;
     }
 
 }
 
-/*************************************************************************
-************ C H E C K S U M    V E R I F I C A T I O N   *************
-*************************************************************************/
-
 control MyVerifyChecksum(inout headers hdr, inout metadata meta) {
-    apply {  }
+    apply { }
 }
-
-
-/*************************************************************************
-************** I N G R E S S   P R O C E S S I N G   *******************
-*************************************************************************/
 
 control MyIngress(inout headers hdr,
                   inout metadata meta,
                   inout standard_metadata_t standard_metadata) {
-    action drop() {
-        mark_to_drop(standard_metadata);
-    }
-
-    action ipv4_forward(macAddr_t dstAddr, egressSpec_t port) {
-        // Define a porta de saída física
-        standard_metadata.egress_spec = port;
-        // Prepara L2 para o próximo hop (será sobrescrito no egress se necessário)
-        hdr.ethernet.srcAddr = hdr.ethernet.dstAddr; // Temporário, será reescrito no Egress
-        hdr.ethernet.dstAddr = dstAddr;
-        // Decrementa TTL
-        hdr.ipv4.ttl = hdr.ipv4.ttl - 1;
-    }
-
-    table ipv4_lpm {
-        key = {
-            hdr.ipv4.dstAddr: lpm;
-        }
-        actions = {
-            ipv4_forward;
-            drop;
-            NoAction; // Caso não queira modificar nada
-        }
-        size = 1024;
-        default_action = drop(); // Descarta se não houver rota
-    }
-
-    action myTunnel_forward(egressSpec_t port) {
-        standard_metadata.egress_spec = port;
-        // Note: Para túneis, geralmente não se modifica L2/L3 interno no ingress
-    }
-
-    table myTunnel_exact {
-        key = {
-            hdr.myTunnel.dst_id: exact;
-        }
-        actions = {
-            myTunnel_forward;
-            drop;
-        }
-        size = 1024;
-        default_action = drop();
-    }
-
     apply {
-        // Verifica se TTL expirou
-
-        if (hdr.ipv4.isValid() && !hdr.myTunnel.isValid()) {
-            // Processa pacotes IPv4 não tunelados
-            ipv4_lpm.apply();
-        }
-
-        if (hdr.myTunnel.isValid()) {
-            // Processa pacotes tunelados
-            myTunnel_exact.apply();
-        }
-
-        // Se nenhuma tabela foi aplicada ou resultou em NoAction,
-        // o pacote pode prosseguir com egress_spec indefinido (pode ser dropado depois)
-        // ou você pode definir um drop explícito aqui se preferir.
-        // if (standard_metadata.egress_spec == 0) { drop(); } // Exemplo opcional
+        // Ingress vazio - foco no parser
+        standard_metadata.egress_spec = 1;
     }
 }
-
-/*************************************************************************
-**************** E G R E S S   P R O C E S S I N G   *******************
-*************************************************************************/
 
 control MyEgress(inout headers hdr,
                  inout metadata meta,
                  inout standard_metadata_t standard_metadata) {
-
-    // Ação para reescrever o MAC de origem baseado na porta de saída
-    action rewrite_src_mac(macAddr_t smac) {
-        hdr.ethernet.srcAddr = smac;
-    }
-
-    // Tabela que mapeia a porta de saída física para o MAC de origem a ser usado
-    table egress_port_smac {
-        key = {
-            // standard_metadata.egress_port contém a porta física final
-            standard_metadata.egress_port: exact;
-        }
-        actions = {
-            rewrite_src_mac;
-            NoAction; // Se não precisar reescrever para alguma porta
-        }
-        size = 256; // Ajuste conforme necessário
-        // A ação padrão pode ser não fazer nada ou usar um MAC default
-        default_action = NoAction();
-    }
-
-    apply {
-        // Aplica a tabela para reescrever o MAC de origem
-        // Somente se o header Ethernet for válido (será emitido)
-        if (hdr.ethernet.isValid()) {
-             egress_port_smac.apply();
-        }
-    }
+    apply { }
 }
 
-/*************************************************************************
-************* C H E C K S U M    C O M P U T A T I O N   **************
-*************************************************************************/
-
-control MyComputeChecksum(inout headers  hdr, inout metadata meta) {
-     apply {
-        // Recalcula checksum IPv4 (TTL foi modificado no ingress)
-        update_checksum(
-            hdr.ipv4.isValid(),
-            { hdr.ipv4.version,
-              hdr.ipv4.ihl,
-              hdr.ipv4.diffserv,
-              hdr.ipv4.totalLen,
-              hdr.ipv4.identification,
-              hdr.ipv4.flags,
-              hdr.ipv4.fragOffset,
-              hdr.ipv4.ttl,
-              hdr.ipv4.protocol,
-              hdr.ipv4.srcAddr,
-              hdr.ipv4.dstAddr },
-            hdr.ipv4.hdrChecksum,
-            HashAlgorithm.csum16);
-    }
+control MyComputeChecksum(inout headers hdr, inout metadata meta) {
+    apply { }
 }
-
-/*************************************************************************
-*********************** D E P A R S E R  *******************************
-*************************************************************************/
 
 control MyDeparser(packet_out packet, in headers hdr) {
     apply {
-        // Emite os headers na ordem correta, se forem válidos
         packet.emit(hdr.ethernet);
-        packet.emit(hdr.myTunnel); // Só emite se myTunnel.isValid()
-        packet.emit(hdr.ipv4);     // Só emite se ipv4.isValid()
+        packet.emit(hdr.proto_0);
+        packet.emit(hdr.proto_1);
+        packet.emit(hdr.proto_2);
+        packet.emit(hdr.proto_3);
+        packet.emit(hdr.proto_4);
+        packet.emit(hdr.proto_5);
+        packet.emit(hdr.proto_6);
+        packet.emit(hdr.proto_7);
+        packet.emit(hdr.proto_8);
+        packet.emit(hdr.proto_9);
+        packet.emit(hdr.proto_10);
+        packet.emit(hdr.proto_11);
+        packet.emit(hdr.proto_12);
+        packet.emit(hdr.proto_13);
+        packet.emit(hdr.proto_14);
+        packet.emit(hdr.proto_15);
+        packet.emit(hdr.proto_16);
+        packet.emit(hdr.proto_17);
+        packet.emit(hdr.proto_18);
+        packet.emit(hdr.proto_19);
+        packet.emit(hdr.proto_20);
+        packet.emit(hdr.proto_21);
+        packet.emit(hdr.proto_22);
+        packet.emit(hdr.proto_23);
+        packet.emit(hdr.proto_24);
+        packet.emit(hdr.proto_25);
+        packet.emit(hdr.proto_26);
+        packet.emit(hdr.proto_27);
+        packet.emit(hdr.proto_28);
+        packet.emit(hdr.proto_29);
+        packet.emit(hdr.proto_30);
+        packet.emit(hdr.proto_31);
+        packet.emit(hdr.proto_32);
+        packet.emit(hdr.proto_33);
+        packet.emit(hdr.proto_34);
+        packet.emit(hdr.proto_35);
+        packet.emit(hdr.proto_36);
+        packet.emit(hdr.proto_37);
+        packet.emit(hdr.proto_38);
+        packet.emit(hdr.proto_39);
     }
 }
 
-/*************************************************************************
-*********************** S W I T C H  *******************************
-*************************************************************************/
-
 V1Switch(
-MyParser(),
-MyVerifyChecksum(),
-MyIngress(),
-MyEgress(),
-MyComputeChecksum(),
-MyDeparser() // <<--- VÍRGULA REMOVIDA DAQUI
+    MyParser(),
+    MyVerifyChecksum(),
+    MyIngress(),
+    MyEgress(),
+    MyComputeChecksum(),
+    MyDeparser()
 ) main;
-
