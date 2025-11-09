@@ -15,7 +15,9 @@ $CONTAINER_BENCHMARK_DIR = "/app/benchmark_exhaustive"
 # Required scripts
 $LOCAL_SCRIPTS = @(
     ".\exhaustive_test_orchestrator.py",
-    ".\synthetic_p4_generator.py"
+    ".\synthetic_p4_generator.py",
+    ".\table_execution_cache.py",
+    ".\deparser_optimizer.py"  
 )
 
 $CONTAINER_RESULTS_DIR = "/app/workspace/exhaustive_test_run"

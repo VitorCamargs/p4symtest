@@ -1,4 +1,4 @@
-# run_deparser.py (Corrected Z3 boolean check)
+# run_deparser.py (Corrected Z3 boolean check + Optimizer metadata preservation)
 import json
 import sys
 from z3 import *
@@ -112,84 +112,136 @@ if __name__ == "__main__":
 
         except Exception as e:
             print(f"  - ERRO: Falha SMT: {e}")
-            state_result = { # Cria resultado de erro
-                "input_state": state.get('description', f'Erro SMT no estado {i}'), "input_state_index": i,
-                "history": state_history, "full_constraints_smt2": state_constraints_smt2,
-                "non_drop_condition_smt": None, "satisfiable": False,
-                "error": f"Falha ao processar SMT-LIB: {e}", "emission_status": []
+            state_result = {
+                "input_state": state.get('description', f'Erro SMT no estado {i}'), 
+                "input_state_index": i,
+                "history": state_history, 
+                "full_constraints_smt2": state_constraints_smt2,
+                "non_drop_condition_smt": None, 
+                "satisfiable": False,
+                "error": f"Falha ao processar SMT-LIB: {e}", 
+                "emission_status": []
             }
-            analysis_results.append(state_result); continue
+            # Preserva metadados de otimização
+            if '_optimizer_hash' in state:
+                state_result['_optimizer_hash'] = state['_optimizer_hash']
+            if '_original_indices' in state:
+                state_result['_original_indices'] = state['_original_indices']
+            if '_group_size' in state:
+                state_result['_group_size'] = state['_group_size']
+            
+            analysis_results.append(state_result)
+            continue
 
         # --- Extrai a condição de não-descarte ---
         egress_spec_update_expr_smt = state_field_updates.get("standard_metadata.egress_spec")
         non_drop_condition_smt = None
         if egress_spec_update_expr_smt:
             egress_spec_var = fields.get(('standard_metadata','egress_spec'))
-            # --- CORREÇÃO: Verifica existencia e tipo antes de .size() ---
-            drop_val_hex = "#xff" # Default 8 bits
+            drop_val_hex = "#xff"
             if egress_spec_var is not None and isinstance(egress_spec_var, z3.BitVecRef):
                  if egress_spec_var.size() == 9:
                       drop_val_hex = "#x1ff"
-            # --- FIM DA CORREÇÃO ---
             non_drop_condition_smt = f"(distinct {egress_spec_update_expr_smt} {drop_val_hex})"
-        else: # Fallback antigo mantido
+        else:
             non_drop_constraint_explicit_9bit = "(distinct standard_metadata.egress_spec #b111111111)"
             non_drop_constraint_explicit_8bit = "(distinct standard_metadata.egress_spec #xff)"
             for constr in state_constraints_smt2:
-                 if non_drop_constraint_explicit_9bit in constr: non_drop_condition_smt = non_drop_constraint_explicit_9bit; break
-                 if non_drop_constraint_explicit_8bit in constr: non_drop_condition_smt = non_drop_constraint_explicit_8bit; break
-
+                 if non_drop_constraint_explicit_9bit in constr: 
+                     non_drop_condition_smt = non_drop_constraint_explicit_9bit
+                     break
+                 if non_drop_constraint_explicit_8bit in constr: 
+                     non_drop_condition_smt = non_drop_constraint_explicit_8bit
+                     break
 
         state_result = {
-            "input_state": state.get('description', 'Sem descrição'), "input_state_index": i,
-            "history": state_history, "full_constraints_smt2": state_constraints_smt2,
-            "non_drop_condition_smt": non_drop_condition_smt, "satisfiable": is_satisfiable,
+            "input_state": state.get('description', 'Sem descrição'), 
+            "input_state_index": i,
+            "history": state_history, 
+            "full_constraints_smt2": state_constraints_smt2,
+            "non_drop_condition_smt": non_drop_condition_smt, 
+            "satisfiable": is_satisfiable,
             "emission_status": []
         }
+        
+        # Preserva metadados de otimização se existirem
+        if '_optimizer_hash' in state:
+            state_result['_optimizer_hash'] = state['_optimizer_hash']
+        if '_original_indices' in state:
+            state_result['_original_indices'] = state['_original_indices']
+        if '_group_size' in state:
+            state_result['_group_size'] = state['_group_size']
 
         if not is_satisfiable:
             print("  - AVISO: Estado insatisfatório. Pulando emissão.")
-            analysis_results.append(state_result); continue
+            analysis_results.append(state_result)
+            continue
 
         print("  - Estado satisfatório. Verificando emissão:")
 
         if state_field_updates:
              decls = {var.sexpr(): var for key, var in fields.items()}
              for field_str, expr_str in state_field_updates.items():
-                 parts=field_str.split('.'); field_key=tuple(parts) if len(parts)==2 else (parts[1],parts[2]) if len(parts)==3 else None
+                 parts=field_str.split('.')
+                 field_key=tuple(parts) if len(parts)==2 else (parts[1],parts[2]) if len(parts)==3 else None
                  if field_key and field_key in fields:
                      try:
                          update_constraint = (fields[field_key] == parse_smt2_string(expr_str, decls=decls))
                          solver.add(update_constraint)
-                     except Exception as e: print(f"    - Erro field_update {field_str}: {e}")
+                     except Exception as e: 
+                         print(f"    - Erro field_update {field_str}: {e}")
 
         for header_name in deparser_order:
             valid_field = fields.get((header_name, '$valid$'))
             if valid_field is None:
                 print(f"    - AVISO: {header_name}.$valid$ não definido.")
-                state_result["emission_status"].append({"header": header_name, "status": "Erro: $valid$ não definido"})
+                state_result["emission_status"].append({
+                    "header": header_name, 
+                    "status": "Erro: $valid$ não definido"
+                })
                 continue
 
             emission_status = "Desconhecido"
             solver.push()
-            try: solver.add(valid_field == 1); check_can_emit = solver.check()
-            except Exception as e: print(f"    - ERRO Z3 {header_name}.$valid$ == 1: {e}"); check_can_emit = unknown
+            try: 
+                solver.add(valid_field == 1)
+                check_can_emit = solver.check()
+            except Exception as e: 
+                print(f"    - ERRO Z3 {header_name}.$valid$ == 1: {e}")
+                check_can_emit = unknown
             solver.pop()
 
             if check_can_emit == sat:
                 solver.push()
-                try: solver.add(valid_field == 0); check_can_not_emit = solver.check()
-                except Exception as e: print(f"    - ERRO Z3 {header_name}.$valid$ == 0: {e}"); check_can_not_emit = unknown
+                try: 
+                    solver.add(valid_field == 0)
+                    check_can_not_emit = solver.check()
+                except Exception as e: 
+                    print(f"    - ERRO Z3 {header_name}.$valid$ == 0: {e}")
+                    check_can_not_emit = unknown
                 solver.pop()
 
-                if check_can_not_emit == sat: emission_status = "Condicional"; print(f"    - {header_name}: EMITIDO (Condicional)")
-                elif check_can_not_emit == unsat: emission_status = "Sempre"; print(f"    - {header_name}: EMITIDO (Sempre)")
-                else: emission_status = "Desconhecido (Erro Z3)"; print(f"    - {header_name}: Status Desconhecido (!=1)")
+                if check_can_not_emit == sat: 
+                    emission_status = "Condicional"
+                    print(f"    - {header_name}: EMITIDO (Condicional)")
+                elif check_can_not_emit == unsat: 
+                    emission_status = "Sempre"
+                    print(f"    - {header_name}: EMITIDO (Sempre)")
+                else: 
+                    emission_status = "Desconhecido (Erro Z3)"
+                    print(f"    - {header_name}: Status Desconhecido (!=1)")
 
-            elif check_can_emit == unsat: emission_status = "Nunca"; print(f"    - {header_name}: NÃO EMITIDO (Inválido)")
-            else: emission_status = "Desconhecido (Erro Z3)"; print(f"    - {header_name}: Status Desconhecido (==1)")
+            elif check_can_emit == unsat: 
+                emission_status = "Nunca"
+                print(f"    - {header_name}: NÃO EMITIDO (Inválido)")
+            else: 
+                emission_status = "Desconhecido (Erro Z3)"
+                print(f"    - {header_name}: Status Desconhecido (==1)")
 
-            state_result["emission_status"].append({"header": header_name, "status": emission_status})
+            state_result["emission_status"].append({
+                "header": header_name, 
+                "status": emission_status
+            })
 
         analysis_results.append(state_result)
 
