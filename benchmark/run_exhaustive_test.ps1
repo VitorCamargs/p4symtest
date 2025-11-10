@@ -99,13 +99,13 @@ New-Item -ItemType Directory -Force -Path $LOCAL_RESULTS_DIR | Out-Null
 $analysisDir = Join-Path $LOCAL_RESULTS_DIR "analysis"
 
 # Copy all results
-docker cp ${CONTAINER_NAME}:${CONTAINER_RESULTS_DIR}/. $LOCAL_RESULTS_DIR
+# docker cp ${CONTAINER_NAME}:${CONTAINER_RESULTS_DIR}/. $LOCAL_RESULTS_DIR
 
-if ($LASTEXITCODE -eq 0) {
-    Write-Host "(OK) Results copied to: $LOCAL_RESULTS_DIR" -ForegroundColor Green
-} else {
-    Write-Host "Warning: Some files may not have been copied" -ForegroundColor Yellow
-}
+# if ($LASTEXITCODE -eq 0) {
+#     Write-Host "(OK) Results copied to: $LOCAL_RESULTS_DIR" -ForegroundColor Green
+# } else {
+#     Write-Host "Warning: Some files may not have been copied" -ForegroundColor Yellow
+# }
 
 # --- 7. Final Report ---
 Write-Host "`n" + "="*70 -ForegroundColor Blue

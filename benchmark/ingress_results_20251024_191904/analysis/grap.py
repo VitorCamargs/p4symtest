@@ -28,7 +28,6 @@ except Exception as e:
 
 
 # Calcular 'percent_reachable' a partir dos dados brutos
-# Isso é necessário para a tabela à direita
 df['total_states_calc'] = df['reachable_states'] + df['unreachable_states']
 # Evitar divisão por zero
 df['percent_reachable'] = np.where(
@@ -41,8 +40,9 @@ df['percent_reachable'] = np.where(
 grouped = df.groupby('num_actions')
 
 # Configurar figura (ajustando espaço para a tabela)
-fig, ax = plt.subplots(figsize=(14, 6))
-plt.subplots_adjust(right=0.75, bottom=0.15, left=0.07)
+# <<< FONTE AUMENTADA (figsize) >>>
+fig, ax = plt.subplots(figsize=(16, 9))
+plt.subplots_adjust(right=0.7, bottom=0.2, left=0.1)
 
 x_positions = []
 x_labels_states = []
@@ -57,11 +57,8 @@ for actions, group in grouped:
     states_groups = group.groupby('parser_output_states')
 
     for states, sg in states_groups:
-        # Coletar dados para o boxplot (Alterado para table_time_s)
-        # sg['table_time_s'] contém todos os tempos brutos para este grupo
         data_series = sg['table_time_s'] 
         
-        # Apenas adicionar se houver dados
         if not data_series.empty:
             all_data_to_plot.append(data_series)
             x_labels_states.append(f"{states}S")
@@ -70,74 +67,78 @@ for actions, group in grouped:
 
     # Armazenar informações do grupo de ação
     group_end = current_x - 1
-    if group_start <= group_end: # Apenas se dados foram adicionados para este grupo
+    if group_start <= group_end: 
         group_center = (group_start + group_end) / 2
         action_groups.append((group_center, f"{actions}A"))
 
         # Adicionar linha separadora vertical
         if current_x > 1 and actions != list(grouped.groups.keys())[-1]:
-            # Não adicionar linha após o último grupo
             ax.axvline(x=current_x - 0.5, linestyle='--', linewidth=0.8, color='gray', alpha=0.5)
 
 # Criar o boxplot de uma só vez
 if all_data_to_plot:
+    # <<< ESTILO ATUALIZADO (Cores, Bordas) >>>
     ax.boxplot(
         all_data_to_plot,
         positions=x_positions,
         widths=0.5,
-        patch_artist=True, # Para preencher com cor
-        boxprops=dict(facecolor='lightblue', color='blue'),
-        medianprops=dict(color='red', linewidth=2),
-        whiskerprops=dict(color='blue'),
-        capprops=dict(color='blue'),
+        patch_artist=True,
+        boxprops=dict(facecolor='#3498db', color='black'),
+        medianprops=dict(color='black', linewidth=2),
+        whiskerprops=dict(color='black'),
+        capprops=dict(color='black'),
         flierprops=dict(marker='o', markersize=3, markerfacecolor='gray', alpha=0.5)
     )
 else:
     print("Nenhum dado encontrado para plotar.")
-    # Se sair, o script não salvará a imagem, então é melhor continuar e salvar um gráfico vazio
     pass
 
+# --- 4. Aplicar Estilo (Fundo Branco, Moldura Preta) ---
+ax.set_facecolor('white') # Fundo branco
+ax.grid(False) # Sem grid
+# Define a moldura preta
+for spine in ax.spines.values():
+    spine.set_edgecolor('black')
+    spine.set_visible(True)
 
 # Eixos
+# <<< FONTES AUMENTADAS + COR PRETA >>>
 ax.set_xticks(x_positions)
-ax.set_xticklabels(x_labels_states)
-ax.set_ylabel("Time (s)")
+ax.set_xticklabels(x_labels_states, fontsize=14, color='black')
+ax.set_ylabel("Time (s)", fontsize=18, color='black')
+ax.tick_params(axis='y', labelsize=16, colors='black')
 
 # Adicionar rótulos de ação abaixo do eixo X
 ax2 = ax.twiny()
 ax2.set_xlim(ax.get_xlim())
 ax2.set_xticks([pos for pos, _ in action_groups])
-ax2.set_xticklabels([label for _, label in action_groups])
+# <<< FONTES AUMENTADAS + COR PRETA >>>
+ax2.set_xticklabels([label for _, label in action_groups], fontsize=16, color='black')
 ax2.xaxis.set_ticks_position('bottom')
 ax2.xaxis.set_label_position('bottom')
 ax2.spines['bottom'].set_position(('outward', 40))
-ax2.set_xlabel("Actions (A)")
+# <<< FONTES AUMENTADAS + COR PRETA >>>
+ax2.set_xlabel("Actions (A)", fontsize=14, color='black')
+ax.set_xlabel("States (S)", fontsize=14, color='black')
 
-ax.set_xlabel("States (S)")
 
 # Auto-ajustar eixo Y
 ax.autoscale_view(True, True, True)
 y_min, y_max = ax.get_ylim()
 y_range = y_max - y_min
-# Adicionar um pequeno buffer, garantindo que o mínimo não seja negativo se os dados forem >= 0
 ax.set_ylim(max(0, y_min - y_range * 0.1), y_max + y_range * 0.1)
 
-
-ax.set_title("Time Distribution by Number of Actions and Input States (from Raw Data)")
+# <<< FONTES AUMENTADAS + COR PRETA >>>
+ax.set_title("Time Distribution by Actions and Input States", fontsize=22, fontweight='bold', color='black')
 
 # ---- TABELA À DIREITA ----
-
-# Obter % alcançável (deve ser o mesmo para todas as execuções da mesma config)
-# Isso agora usa o 'percent_reachable' calculado do arquivo bruto
 table_data = df.groupby('parser_output_states')['percent_reachable'].first().reset_index()
 table_data.columns = ["States", "% Reach."]
 table_data["% Reach."] = table_data["% Reach."].round(2)
-
-# Ordenar tabela por Estados para garantir a ordem
 table_data = table_data.sort_values(by="States")
 
 # Create embedded table in the figure
-table_ax = fig.add_axes([0.7, 0.15, 0.15, 0.4])
+table_ax = fig.add_axes([0.72, 0.2, 0.15, 0.4]) # [left, bottom, width, height]
 table_ax.axis('off')
 table = table_ax.table(
     cellText=table_data.values,
@@ -147,13 +148,30 @@ table = table_ax.table(
     colWidths=[0.4, 0.5]
 )
 table.auto_set_font_size(False)
-table.set_fontsize(12)
-table.scale(1, 1.5)
+# <<< FONTES AUMENTADAS >>>
+table.set_fontsize(14)
+table.scale(1, 2)
 
-table_ax.set_title("% Reachable States", pad=1)
+# <<< FONTES AUMENTADAS + COR PRETA >>>
+table_ax.set_title("% Reachable States", pad=10, fontsize=18, fontweight='bold', color='black')
+
+
+# --- 3.7 Destacar o tick máximo (negrito) ---
+try:
+    print("Aplicando negrito e fonte maior ao tick máximo...")
+    fig.canvas.draw()
+    ticks = ax.yaxis.get_major_ticks()
+    if ticks:
+        # O 'label1' é o label do eixo Y (lado esquerdo)
+        ticks[-1].label1.set_fontweight('bold')
+        ticks[-1].label1.set_fontsize(18) # Fonte maior
+        ticks[-1].label1.set_color('black') # Cor preta
+    print("Estilo de tick aplicado.")
+except Exception as e:
+    print(f"Aviso: Não foi possível aplicar estilo aos ticks do eixo Y: {e}")
 
 # ---- FINAL ----
-# Salvar a figura
+# Remover configuração global de rcParams
 output_filename = "boxplot_from_raw_data.png"
 plt.show()
 

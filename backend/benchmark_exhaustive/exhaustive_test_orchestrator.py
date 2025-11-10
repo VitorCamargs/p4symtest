@@ -580,7 +580,7 @@ def main():
     log.info("INICIANDO TESTE EXAUSTIVO DO P4SYMTEST")
     log.info("="*70)
     
-    NUM_RUNS = 1
+    NUM_RUNS = 5
     log.info(f"Configurado para {NUM_RUNS} execuções por configuração")
     
     scripts_dir = Path("/app/workspace")
@@ -597,7 +597,7 @@ def main():
         (8, 8, 1),
         (8, 10, 1),
         (8, 12, 1),
-        (8, 15, 1),
+        (8, 14, 1),
     ]
     
     log.info(f"Gerando {len(test_configs)} configurações P4 (apenas lógica 'parallel')...")
