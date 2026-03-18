@@ -1,0 +1,36 @@
+[
+  {
+    "description": "start [extract ethernet] -> parse_ipv4 [extract ipv4]",
+    "z3_constraints_smt2": [
+      "(= ethernet.etherType #x0800)",
+      "(= standard_metadata.$valid$ #b0)",
+      "(= ethernet.$valid$ #b1)",
+      "(= myTunnel.$valid$ #b0)",
+      "(= ipv4.$valid$ #b1)"
+    ],
+    "present_headers": [
+      "ethernet",
+      "ipv4"
+    ],
+    "history": [
+      "Parser"
+    ]
+  },
+  {
+    "description": "start [extract ethernet]",
+    "z3_constraints_smt2": [
+      "(not (= ethernet.etherType #x1212))",
+      "(not (= ethernet.etherType #x0800))",
+      "(= standard_metadata.$valid$ #b0)",
+      "(= ethernet.$valid$ #b1)",
+      "(= myTunnel.$valid$ #b0)",
+      "(= ipv4.$valid$ #b0)"
+    ],
+    "present_headers": [
+      "ethernet"
+    ],
+    "history": [
+      "Parser"
+    ]
+  }
+]

@@ -1,0 +1,81 @@
+[
+  {
+    "description": "start [extract ethernet] -> parse_myTunnel [extract myTunnel] -> parse_ipv4 [extract ipv4]",
+    "z3_constraints_smt2": [
+      "(= ethernet.etherType #x1212)",
+      "(= myTunnel.proto_id #x0800)",
+      "(= standard_metadata.$valid$ #b0)",
+      "(= ethernet.$valid$ #b1)",
+      "(= myTunnel.$valid$ #b1)",
+      "(= ipv4.$valid$ #b1)"
+    ],
+    "present_headers": [
+      "ethernet",
+      "ipv4",
+      "myTunnel"
+    ],
+    "history": [
+      "Parser"
+    ]
+  },
+  {
+    "description": "start [extract ethernet] -> parse_myTunnel [extract myTunnel]",
+    "z3_constraints_smt2": [
+      "(= ethernet.etherType #x1212)",
+      "(not (= myTunnel.proto_id #x0800))",
+      "(= standard_metadata.$valid$ #b0)",
+      "(= ethernet.$valid$ #b1)",
+      "(= myTunnel.$valid$ #b1)",
+      "(= ipv4.$valid$ #b0)"
+    ],
+    "present_headers": [
+      "ethernet",
+      "myTunnel"
+    ],
+    "history": [
+      "Parser"
+    ]
+  },
+  {
+    "description": "start [extract ethernet] -> parse_ipv4 [extract ipv4] -> MyIngress.ipv4_lpm",
+    "z3_constraints_smt2": [
+      "(= ethernet.etherType #x0800)",
+      "(= standard_metadata.$valid$ #b0)",
+      "(= ethernet.$valid$ #b1)",
+      "(= myTunnel.$valid$ #b0)",
+      "(= ipv4.$valid$ #b1)",
+      "(let ((a!1 (ite (= ipv4.dstAddr #x0a000001)\n                #b000000001\n                (ite (= ipv4.dstAddr #x0a000002)\n                     #b000000010\n                     (ite (= ipv4.dstAddr #x0a000003) #b000000011 #b111111111)))))\n  (distinct a!1 #b111111111))"
+    ],
+    "present_headers": [
+      "ethernet",
+      "ipv4"
+    ],
+    "history": [
+      "Parser",
+      "MyIngress.ipv4_lpm"
+    ],
+    "field_updates": {
+      "standard_metadata.egress_spec": "(ite (= ipv4.dstAddr #x0a000001)\n     #b000000001\n     (ite (= ipv4.dstAddr #x0a000002)\n          #b000000010\n          (ite (= ipv4.dstAddr #x0a000003) #b000000011 #b111111111)))",
+      "ethernet.dstAddr": "(ite (= ipv4.dstAddr #x0a000001)\n     #x000000000101\n     (ite (= ipv4.dstAddr #x0a000002)\n          #x10cff1435402\n          (ite (= ipv4.dstAddr #x0a000003) #x10cff1435502 ethernet.dstAddr)))",
+      "ethernet.srcAddr": "(ite (or (= ipv4.dstAddr #x0a000001)\n         (= ipv4.dstAddr #x0a000002)\n         (= ipv4.dstAddr #x0a000003))\n     ethernet.dstAddr\n     ethernet.srcAddr)",
+      "ipv4.ttl": "(ite (or (= ipv4.dstAddr #x0a000001)\n         (= ipv4.dstAddr #x0a000002)\n         (= ipv4.dstAddr #x0a000003))\n     (bvadd #xff ipv4.ttl)\n     ipv4.ttl)"
+    }
+  },
+  {
+    "description": "start [extract ethernet]",
+    "z3_constraints_smt2": [
+      "(not (= ethernet.etherType #x1212))",
+      "(not (= ethernet.etherType #x0800))",
+      "(= standard_metadata.$valid$ #b0)",
+      "(= ethernet.$valid$ #b1)",
+      "(= myTunnel.$valid$ #b0)",
+      "(= ipv4.$valid$ #b0)"
+    ],
+    "present_headers": [
+      "ethernet"
+    ],
+    "history": [
+      "Parser"
+    ]
+  }
+]

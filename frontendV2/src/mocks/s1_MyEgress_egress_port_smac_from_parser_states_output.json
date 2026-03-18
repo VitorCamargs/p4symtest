@@ -1,0 +1,89 @@
+[
+  {
+    "description": "start [extract ethernet] -> parse_myTunnel [extract myTunnel] -> parse_ipv4 [extract ipv4] -> MyEgress.egress_port_smac",
+    "z3_constraints_smt2": [
+      "(= ethernet.etherType #x1212)",
+      "(= myTunnel.proto_id #x0800)",
+      "(= standard_metadata.$valid$ #b0)",
+      "(= ethernet.$valid$ #b1)",
+      "(= myTunnel.$valid$ #b1)",
+      "(= ipv4.$valid$ #b1)"
+    ],
+    "present_headers": [
+      "ethernet",
+      "ipv4",
+      "myTunnel"
+    ],
+    "history": [
+      "Parser",
+      "MyEgress.egress_port_smac"
+    ],
+    "field_updates": {
+      "ethernet.srcAddr": "(ite (= standard_metadata.egress_port #b000000001)\n     #x10cff1435301\n     (ite (= standard_metadata.egress_port #b000000010)\n          #x10cff1435302\n          (ite (= standard_metadata.egress_port #b000000011)\n               #x10cff1435303\n               ethernet.srcAddr)))"
+    }
+  },
+  {
+    "description": "start [extract ethernet] -> parse_myTunnel [extract myTunnel] -> MyEgress.egress_port_smac",
+    "z3_constraints_smt2": [
+      "(= ethernet.etherType #x1212)",
+      "(not (= myTunnel.proto_id #x0800))",
+      "(= standard_metadata.$valid$ #b0)",
+      "(= ethernet.$valid$ #b1)",
+      "(= myTunnel.$valid$ #b1)",
+      "(= ipv4.$valid$ #b0)"
+    ],
+    "present_headers": [
+      "ethernet",
+      "myTunnel"
+    ],
+    "history": [
+      "Parser",
+      "MyEgress.egress_port_smac"
+    ],
+    "field_updates": {
+      "ethernet.srcAddr": "(ite (= standard_metadata.egress_port #b000000001)\n     #x10cff1435301\n     (ite (= standard_metadata.egress_port #b000000010)\n          #x10cff1435302\n          (ite (= standard_metadata.egress_port #b000000011)\n               #x10cff1435303\n               ethernet.srcAddr)))"
+    }
+  },
+  {
+    "description": "start [extract ethernet] -> parse_ipv4 [extract ipv4] -> MyEgress.egress_port_smac",
+    "z3_constraints_smt2": [
+      "(= ethernet.etherType #x0800)",
+      "(= standard_metadata.$valid$ #b0)",
+      "(= ethernet.$valid$ #b1)",
+      "(= myTunnel.$valid$ #b0)",
+      "(= ipv4.$valid$ #b1)"
+    ],
+    "present_headers": [
+      "ethernet",
+      "ipv4"
+    ],
+    "history": [
+      "Parser",
+      "MyEgress.egress_port_smac"
+    ],
+    "field_updates": {
+      "ethernet.srcAddr": "(ite (= standard_metadata.egress_port #b000000001)\n     #x10cff1435301\n     (ite (= standard_metadata.egress_port #b000000010)\n          #x10cff1435302\n          (ite (= standard_metadata.egress_port #b000000011)\n               #x10cff1435303\n               ethernet.srcAddr)))"
+    }
+  },
+  {
+    "description": "start [extract ethernet] -> MyEgress.egress_port_smac",
+    "z3_constraints_smt2": [
+      "(not (= ethernet.etherType #x1212))",
+      "(not (= ethernet.etherType #x0800))",
+      "(= standard_metadata.$valid$ #b0)",
+      "(= ethernet.$valid$ #b1)",
+      "(= myTunnel.$valid$ #b0)",
+      "(= ipv4.$valid$ #b0)"
+    ],
+    "present_headers": [
+      "ethernet"
+    ],
+    "history": [
+      "Parser",
+      "MyEgress.egress_port_smac"
+    ],
+    "field_updates": {
+      "ethernet.srcAddr": "(ite (= standard_metadata.egress_port #b000000001)\n     #x10cff1435301\n     (ite (= standard_metadata.egress_port #b000000010)\n          #x10cff1435302\n          (ite (= standard_metadata.egress_port #b000000011)\n               #x10cff1435303\n               ethernet.srcAddr)))"
+    }
+  }
+]

@@ -1,0 +1,37 @@
+[
+  {
+    "description": "start [extract ethernet] -> parse_myTunnel [extract myTunnel]",
+    "z3_constraints_smt2": [
+      "(= ethernet.etherType #x1212)",
+      "(not (= myTunnel.proto_id #x0800))",
+      "(= standard_metadata.$valid$ #b0)",
+      "(= ethernet.$valid$ #b1)",
+      "(= myTunnel.$valid$ #b1)",
+      "(= ipv4.$valid$ #b0)"
+    ],
+    "present_headers": [
+      "ethernet",
+      "myTunnel"
+    ],
+    "history": [
+      "Parser"
+    ]
+  },
+  {
+    "description": "start [extract ethernet]",
+    "z3_constraints_smt2": [
+      "(not (= ethernet.etherType #x1212))",
+      "(not (= ethernet.etherType #x0800))",
+      "(= standard_metadata.$valid$ #b0)",
+      "(= ethernet.$valid$ #b1)",
+      "(= myTunnel.$valid$ #b0)",
+      "(= ipv4.$valid$ #b0)"
+    ],
+    "present_headers": [
+      "ethernet"
+    ],
+    "history": [
+      "Parser"
+    ]
+  }
+]
