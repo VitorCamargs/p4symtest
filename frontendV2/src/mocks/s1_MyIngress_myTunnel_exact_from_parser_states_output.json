@@ -21,7 +21,8 @@
     ],
     "field_updates": {
       "standard_metadata.egress_spec": "(ite (= myTunnel.dst_id #x0001)\n     #b000000001\n     (ite (= myTunnel.dst_id #x0002)\n          #b000000010\n          (ite (= myTunnel.dst_id #x0003) #b000000011 #b111111111)))"
-    }
+    },
+    "path_id": "23612a33-460b-4ec9-bbc5-e3d72ee4a0ed"
   },
   {
     "description": "start [extract ethernet] -> parse_myTunnel [extract myTunnel] -> MyIngress.myTunnel_exact",
@@ -44,7 +45,8 @@
     ],
     "field_updates": {
       "standard_metadata.egress_spec": "(ite (= myTunnel.dst_id #x0001)\n     #b000000001\n     (ite (= myTunnel.dst_id #x0002)\n          #b000000010\n          (ite (= myTunnel.dst_id #x0003) #b000000011 #b111111111)))"
-    }
+    },
+    "path_id": "b01e4002-e9ce-4d0f-88e8-7022d1b309b6"
   },
   {
     "description": "start [extract ethernet] -> parse_ipv4 [extract ipv4]",
@@ -61,7 +63,8 @@
     ],
     "history": [
       "Parser"
-    ]
+    ],
+    "path_id": "84569d61-3ca3-4cc5-a484-71538003e5ac"
   },
   {
     "description": "start [extract ethernet]",
@@ -78,6 +81,7 @@
     ],
     "history": [
       "Parser"
-    ]
+    ],
+    "path_id": "6c214390-c8f0-444d-be1a-052e871d91f6"
   }
 ]

@@ -15,7 +15,8 @@
         "header": "ipv4",
         "status": "Sempre"
       }
-    ]
+    ],
+    "path_id": "728de6cb-8284-4ca5-a7b6-c1faffc0cb46"
   },
   {
     "input_state": "start [extract ethernet] -> parse_myTunnel [extract myTunnel]",
@@ -33,7 +34,8 @@
         "header": "ipv4",
         "status": "Nunca"
       }
-    ]
+    ],
+    "path_id": "03e1635b-a8fd-42b2-99f2-a75ab6c45468"
   },
   {
     "input_state": "start [extract ethernet] -> parse_ipv4 [extract ipv4]",
@@ -51,7 +53,8 @@
         "header": "ipv4",
         "status": "Sempre"
       }
-    ]
+    ],
+    "path_id": "369e7e54-f28e-4703-9ce3-6fdd361b09c6"
   },
   {
     "input_state": "start [extract ethernet]",
@@ -69,6 +72,7 @@
         "header": "ipv4",
         "status": "Nunca"
       }
-    ]
+    ],
+    "path_id": "319556d2-058f-4e7a-ae66-5e73ba309cc7"
   }
 ]

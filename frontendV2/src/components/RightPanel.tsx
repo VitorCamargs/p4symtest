@@ -1,26 +1,42 @@
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { Activity, ChevronDown, ChevronRight, ArrowRight, CheckCircle2, XCircle, Eye, EyeOff } from 'lucide-react';
-import { mockData } from '../lib/mockData';
 import { parseConstraint, parseIte, prettyField, prettyComplexConstraint } from '../lib/smt2pretty';
 
-const PathItem = ({ pathData, index, activeVerification }: { pathData: any, index: number, activeVerification: { type: string, name: string } | null }) => {
+// ── PathItem ──────────────────────────────────────────────────────────────────
+
+const PathItem = ({
+  pathData,
+  index,
+  displayName,
+  activeVerification,
+  compiledData,
+}: {
+  pathData: any;
+  index: number;
+  displayName?: string;
+  activeVerification: { type: string; name: string } | null;
+  compiledData?: any;
+}) => {
   const [expanded, setExpanded] = useState(false);
-  
+
   const rawNodes = pathData.description ? pathData.description.split(' -> ') : [];
   const pathNodes = rawNodes.map((node: string) => {
     const match = node.match(/\[(.*?)\]/);
     return match ? match[1] : node;
   });
-  
+
   let status = 'Processed';
   let StatusIcon = CheckCircle2;
   let statusColor = 'var(--success)';
-  
+
   const targetType = activeVerification?.type;
   const targetName = activeVerification?.name;
 
   if (targetType === 'parser' || targetType === 'deparser') {
-    if (pathData.description?.toLowerCase().includes('drop') || pathData.history?.some((h: string) => h.toLowerCase().includes('drop'))) {
+    if (
+      pathData.description?.toLowerCase().includes('drop') ||
+      pathData.history?.some((h: string) => h.toLowerCase().includes('drop'))
+    ) {
       status = 'Dropped';
       StatusIcon = XCircle;
       statusColor = 'var(--danger)';
@@ -39,21 +55,21 @@ const PathItem = ({ pathData, index, activeVerification }: { pathData: any, inde
 
   return (
     <div style={{ background: 'var(--bg-panel)', padding: '0.8rem', borderRadius: '6px', border: '1px solid var(--border)' }}>
-      <div 
-        onClick={() => setExpanded(!expanded)} 
+      <div
+        onClick={() => setExpanded(!expanded)}
         style={{ display: 'flex', alignItems: 'center', gap: '0.8rem', cursor: 'pointer', userSelect: 'none' }}
       >
         {expanded ? <ChevronDown size={16} color="var(--accent)" /> : <ChevronRight size={16} color="var(--accent)" />}
-        
+
         <span style={{ fontWeight: 600, color: 'var(--text-main)', fontSize: '0.85rem', minWidth: '60px' }}>
-          Path {index + 1}
+          {displayName || `Path ${index + 1}`}
         </span>
-        
+
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginLeft: 'auto', background: 'var(--bg-surface)', padding: '0.3rem 0.6rem', borderRadius: '4px', color: statusColor, fontSize: '0.75rem', fontWeight: 600 }}>
           <StatusIcon size={14} /> {status}
         </div>
       </div>
-      
+
       {!expanded && pathNodes.length > 0 && (
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginTop: '0.8rem', marginLeft: '1.8rem', overflowX: 'auto', paddingBottom: '0.4rem' }}>
           {pathNodes.map((node: string, i: number) => (
@@ -87,11 +103,7 @@ const PathItem = ({ pathData, index, activeVerification }: { pathData: any, inde
 
           {status === 'Missed Conditions' && pathData.z3_constraints_smt2 && (
             (() => {
-              const targetName = activeVerification?.name || '';
-
-              // Replicate backend find_path_to_table:
-              // Walk pipeline conditionals to find which one gates this table (true_next == table).
-              const allPipelines: any[] = mockData.compiledStructures?.pipelines || [];
+              const allPipelines: any[] = compiledData?.pipelines || [];
               let failedCondition = '';
 
               for (const pipeline of allPipelines) {
@@ -99,8 +111,6 @@ const PathItem = ({ pathData, index, activeVerification }: { pathData: any, inde
                   (cond: any) => cond.true_next === targetName
                 );
                 if (gatingNode?.source_info?.source_fragment) {
-                  // source_fragment is the original P4 condition string, e.g.
-                  // "hdr.ipv4.isValid() && !hdr.myTunnel.isValid()"
                   failedCondition = gatingNode.source_info.source_fragment;
                   break;
                 }
@@ -125,17 +135,15 @@ const PathItem = ({ pathData, index, activeVerification }: { pathData: any, inde
 
           {pathData.present_headers && (
             <div style={{ marginBottom: '1rem' }}>
-              <strong style={{ color: 'var(--accent)' }}>Present Headers:</strong><br/>
+              <strong style={{ color: 'var(--accent)' }}>Present Headers:</strong><br />
               <span style={{ color: '#94a3b8' }}>{pathData.present_headers.join(', ')}</span>
             </div>
           )}
 
-          {/* ---- Field Updates: visual ITE decision table ---- */}
           {pathData.field_updates && Object.keys(pathData.field_updates).length > 0 && (
             <FieldUpdatesView updates={pathData.field_updates} />
           )}
 
-          {/* ---- Z3 Constraints: visual badges + raw toggle ---- */}
           {pathData.z3_constraints_smt2 && (
             <Z3ConstraintsView constraints={pathData.z3_constraints_smt2} />
           )}
@@ -145,7 +153,8 @@ const PathItem = ({ pathData, index, activeVerification }: { pathData: any, inde
   );
 };
 
-// ---- Visual: Field Updates ----
+// ── FieldUpdatesView ──────────────────────────────────────────────────────────
+
 function FieldUpdatesView({ updates }: { updates: Record<string, string> }) {
   const [showRaw, setShowRaw] = useState(false);
   return (
@@ -197,12 +206,13 @@ function FieldUpdatesView({ updates }: { updates: Record<string, string> }) {
   );
 }
 
-// ---- Visual: Z3 Constraints ----
+// ── Z3ConstraintsView ─────────────────────────────────────────────────────────
+
 const OP_COLORS: Record<string, { bg: string; color: string }> = {
-  '==': { bg: 'rgba(34,197,94,0.1)', color: '#22c55e' },
-  '!=': { bg: 'rgba(239,68,68,0.1)', color: '#ef4444' },
-  'is true': { bg: 'rgba(56,189,248,0.1)', color: '#38bdf8' },
-  'is false': { bg: 'rgba(239,68,68,0.08)', color: '#f87171' },
+  '==':      { bg: 'rgba(34,197,94,0.1)',   color: '#22c55e' },
+  '!=':      { bg: 'rgba(239,68,68,0.1)',   color: '#ef4444' },
+  'is true': { bg: 'rgba(56,189,248,0.1)',  color: '#38bdf8' },
+  'is false':{ bg: 'rgba(239,68,68,0.08)', color: '#f87171' },
 };
 
 function Z3ConstraintsView({ constraints }: { constraints: string[] }) {
@@ -245,51 +255,61 @@ function Z3ConstraintsView({ constraints }: { constraints: string[] }) {
   );
 }
 
-import s1MyIngressIpv4LpmFromParserStatesOutput from '../mocks/s1_MyIngress_ipv4_lpm_from_parser_states_output.json';
-import deparserOutputFromIpv4LpmFromParserStates from '../mocks/deparser_output_from_s1_MyIngress_ipv4_lpm_from_parser_states_output.json';
-import s1MyEgressFromIpv4LpmChainOutput from '../mocks/s1_MyEgress_egress_port_smac_from_s1_MyIngress_ipv4_lpm_from_parser_states_output_output.json';
+// ── RightPanel ────────────────────────────────────────────────────────────────
 
-export default function RightPanel({ activeVerification, executionChain }: {
-  activeVerification: { type: string, name: string } | null;
-  executionChain: string[];
+export default function RightPanel({
+  activeVerification,
+  verificationResult,
+  compiledData,
+}: {
+  activeVerification: { type: string; name: string } | null;
+  verificationResult: any;
+  compiledData?: any;
 }) {
-  const logs = mockData.executionLogs;
+  const activeLogs: any[] = Array.isArray(verificationResult) ? verificationResult : [];
+  const numPaths = activeLogs.length;
 
-  // Build a chain key from the execution chain for mock selection.
-  // Example: ['parser', 'ipv4_lpm'] → 'parser→ipv4_lpm'
-  const chainKey = executionChain.join('→');
+  const pathMapRef = useRef<Map<string, number>>(new Map());
+  const pathCounterRef = useRef<number>(1);
 
-  const getLogDisplay = () => {
-    if (!activeVerification) return null;
-
-    const { type, name } = activeVerification;
-
-    if (type === 'parser') return logs.parserStates;
-    if (type === 'deparser') {
-      // If previous chain had ipv4_lpm, use the richer deparser mock
-      if (chainKey.includes('ipv4_lpm')) return deparserOutputFromIpv4LpmFromParserStates;
-      return logs.deparserOutputFromParserStates;
+  useEffect(() => {
+    if (!activeVerification) {
+      pathMapRef.current.clear();
+      pathCounterRef.current = 1;
     }
-    if (name === 'MyIngress.ipv4_lpm') {
-      // Always from parser states when parser was run first
-      if (chainKey.includes('parser')) return s1MyIngressIpv4LpmFromParserStatesOutput;
-      return logs.s1MyIngressIpv4LpmOutput;
-    }
-    if (name === 'MyIngress.myTunnel_exact') return logs.s1MyIngressMyTunnelExactOutput;
-    if (name === 'MyEgress.egress_port_smac') {
-      // Chain: parser → ipv4_lpm → egress  →  IPv4-forwarded paths + 3 missed
-      if (chainKey.includes('ipv4_lpm')) return s1MyEgressFromIpv4LpmChainOutput;
-      // Chain: parser → myTunnel_exact → egress  →  tunnel-forwarded paths + 2 missed
-      if (chainKey.includes('myTunnel_exact')) return logs.s1MyEgressFromMyTunnelChainOutput;
-      // Chain: parser → egress only
-      return logs.s1MyEgressEgressPortSmacOutput;
-    }
+  }, [activeVerification]);
 
-    return logs.s1TblDropFromParserStatesOutput;
+  const getPathDisplayName = (state: any, index: number, allStates: any[]) => {
+    const defaultName = `Path ${index + 1}`;
+    if (!state.path_id) return defaultName;
+
+    if (!pathMapRef.current.has(state.path_id)) {
+       pathMapRef.current.set(state.path_id, pathCounterRef.current++);
+    }
+    const baseNum = pathMapRef.current.get(state.path_id);
+    
+    const duplicates = allStates.filter(s => s.path_id === state.path_id);
+    if (duplicates.length > 1) {
+       const subIdx = duplicates.indexOf(state);
+       return `Path ${baseNum}.${subIdx + 1}`;
+    }
+    return `Path ${baseNum}`;
   };
 
-  const activeLogs = getLogDisplay();
-  const numPaths = Array.isArray(activeLogs) ? activeLogs.length : 0;
+  // Pre-calculate display names and sorting keys
+  const renderedLogs = activeLogs.map((log, idx) => {
+    const displayName = getPathDisplayName(log, idx, activeLogs);
+    const match = displayName.match(/Path (\d+)(?:\.(\d+))?/);
+    const baseNum = match ? parseInt(match[1], 10) : 9999;
+    const subNum = match && match[2] ? parseInt(match[2], 10) : 0;
+    return { log, idx, displayName, baseNum, subNum };
+  });
+
+  // Sort by base number, then sub number
+  renderedLogs.sort((a, b) => {
+    if (a.baseNum !== b.baseNum) return a.baseNum - b.baseNum;
+    return a.subNum - b.subNum;
+  });
 
   return (
     <>
@@ -297,7 +317,7 @@ export default function RightPanel({ activeVerification, executionChain }: {
         <Activity size={18} /> Execution Info
       </div>
       <div className="panel-content" style={{ display: 'flex', flexDirection: 'column', gap: '1rem', background: 'var(--bg-dark)' }}>
-        
+
         <div style={{ background: 'var(--bg-panel)', padding: '1rem', borderRadius: '6px', border: '1px solid var(--border)' }}>
           <h4 style={{ marginBottom: '0.8rem', color: '#fff', fontSize: '0.9rem' }}>Verification Results</h4>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.6rem', fontSize: '0.85rem' }}>
@@ -316,28 +336,30 @@ export default function RightPanel({ activeVerification, executionChain }: {
 
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
           <h4 style={{ fontSize: '0.9rem', marginBottom: '0.8rem', color: 'var(--text-main)' }}>Path Logs</h4>
-          <div style={{ 
-            display: 'flex',
-            flexDirection: 'column',
-            gap: '0.6rem',
-            overflowY: 'auto',
-            flex: 1
-          }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem', overflowY: 'auto', flex: 1 }}>
             {!activeVerification ? (
               <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem', textAlign: 'center', marginTop: '2rem' }}>
-                Select a structure in the center panel and click "Run Verification" to view execution paths.
+                Select a structure in the center panel and click "Verify" to view execution paths.
               </span>
+            ) : renderedLogs.length > 0 ? (
+              renderedLogs.map(({ log, idx, displayName }) => (
+                <PathItem
+                  key={idx}
+                  pathData={log}
+                  index={idx}
+                  displayName={displayName}
+                  activeVerification={activeVerification}
+                  compiledData={compiledData}
+                />
+              ))
             ) : (
-              Array.isArray(activeLogs) ? (
-                activeLogs.map((log, idx) => <PathItem key={idx} pathData={log} index={idx} activeVerification={activeVerification} />)
-              ) : (
-                <div style={{ background: '#0a0a0a', padding: '1rem', borderRadius: '6px', color: '#94a3b8', fontSize: '0.75rem', fontFamily: 'monospace', overflowX: 'auto' }}>
-                  {JSON.stringify(activeLogs, null, 2)}
-                </div>
-              )
+              <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem', textAlign: 'center', marginTop: '2rem' }}>
+                No paths returned for this verification.
+              </span>
             )}
           </div>
         </div>
+
       </div>
     </>
   );

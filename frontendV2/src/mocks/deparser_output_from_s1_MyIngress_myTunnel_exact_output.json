@@ -15,7 +15,8 @@
         "header": "ipv4",
         "status": "Sempre"
       }
-    ]
+    ],
+    "path_id": "fa854261-2d5c-4f19-9c42-5ab951855f0c"
   },
   {
     "input_state": "start [extract ethernet]",
@@ -33,6 +34,7 @@
         "header": "ipv4",
         "status": "Nunca"
       }
-    ]
+    ],
+    "path_id": "31d10b8d-9404-4091-b50c-a807bb4908f7"
   }
 ]

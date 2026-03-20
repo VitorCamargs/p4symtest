@@ -1,10 +1,59 @@
-import { useState } from 'react';
-import { FolderTree, Settings, ChevronLeft, ChevronRight } from 'lucide-react';
+import { useState, useRef } from 'react';
+import { FolderTree, Settings, ChevronLeft, ChevronRight, Plus, FolderUp } from 'lucide-react';
 import NetworkConfigModal, { useNetworkConfig } from './NetworkConfigModal';
 
-export default function LeftPanel({ isCollapsed = false, onToggle }: { isCollapsed?: boolean, onToggle?: () => void }) {
+export default function LeftPanel({ 
+  isCollapsed = false, 
+  onToggle,
+  files = [],
+  activeFileName = null,
+  onCreateFile = () => {},
+  onUploadFile = () => {},
+  onSelectFile = () => {}
+}: { 
+  isCollapsed?: boolean, 
+  onToggle?: () => void,
+  files?: string[],
+  activeFileName?: string | null,
+  onCreateFile?: (name: string) => void,
+  onUploadFile?: (name: string, content: string) => void,
+  onSelectFile?: (name: string) => void
+}) {
   const [showConfig, setShowConfig] = useState(false);
   const { config, setConfig } = useNetworkConfig();
+
+  const [isCreatingFile, setIsCreatingFile] = useState(false);
+  const [newFileName, setNewFileName] = useState('');
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleCreateSubmit = () => {
+    if (newFileName.trim()) {
+      onCreateFile(newFileName.trim());
+    }
+    setIsCreatingFile(false);
+    setNewFileName('');
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') handleCreateSubmit();
+    if (e.key === 'Escape') {
+      setIsCreatingFile(false);
+      setNewFileName('');
+    }
+  };
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      const content = evt.target?.result as string;
+      onUploadFile(file.name, content);
+    };
+    reader.readAsText(file);
+    e.target.value = '';
+  };
 
   const totalRoutes = config.switches.reduce(
     (a, s) => a + s.ipv4Routes.length + s.tunnelRoutes.length, 0
@@ -19,7 +68,19 @@ export default function LeftPanel({ isCollapsed = false, onToggle }: { isCollaps
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
               <FolderTree size={18} /> <span style={{ fontSize: '0.85rem' }}>File Manager</span>
             </div>
-            {onToggle && <ChevronLeft size={18} cursor="pointer" onClick={onToggle} style={{ color: 'var(--text-muted)' }} />}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+              <span title="New File" style={{ display: 'flex', cursor: 'pointer' }} onClick={() => setIsCreatingFile(true)}>
+                <Plus size={16} style={{ color: 'var(--text-muted)' }} />
+              </span>
+              <span title="Upload File" style={{ display: 'flex', cursor: 'pointer' }} onClick={() => fileInputRef.current?.click()}>
+                <FolderUp size={16} style={{ color: 'var(--text-muted)' }} />
+              </span>
+              {onToggle && (
+                <span title="Collapse" style={{ display: 'flex', cursor: 'pointer', paddingLeft: '0.2rem' }} onClick={onToggle}>
+                  <ChevronLeft size={18} style={{ color: 'var(--text-muted)' }} />
+                </span>
+              )}
+            </div>
           </>
         ) : (
           onToggle && <ChevronRight size={18} cursor="pointer" onClick={onToggle} style={{ color: 'var(--text-muted)' }} />
@@ -27,14 +88,60 @@ export default function LeftPanel({ isCollapsed = false, onToggle }: { isCollaps
       </div>
 
       <div className="panel-content" style={{ padding: isCollapsed ? '1rem 0' : '1rem' }}>
-        <div style={{ marginBottom: '1.5rem', display: 'flex', flexDirection: 'column', alignItems: isCollapsed ? 'center' : 'stretch' }}>
-          <div style={{
-            padding: '0.5rem', borderRadius: '4px', backgroundColor: 'var(--bg-surface)', cursor: 'pointer',
-            display: 'flex', alignItems: 'center', gap: '0.5rem', justifyContent: isCollapsed ? 'center' : 'flex-start'
-          }} title="programa.p4">
-            <span style={{ color: 'var(--accent)', display: 'flex' }}>📝</span>
-            {!isCollapsed && <span style={{ fontSize: '0.85rem' }}>programa.p4</span>}
-          </div>
+        <input 
+          type="file" 
+          ref={fileInputRef} 
+          style={{ display: 'none' }} 
+          accept=".p4"
+          onChange={handleFileUpload} 
+        />
+        <div style={{ marginBottom: '1.5rem', display: 'flex', flexDirection: 'column', gap: '0.2rem', alignItems: isCollapsed ? 'center' : 'stretch' }}>
+          {files.map(fileName => (
+             <div 
+               key={fileName}
+               onClick={() => onSelectFile(fileName)}
+               style={{
+                padding: '0.4rem 0.5rem', borderRadius: '4px', cursor: 'pointer',
+                backgroundColor: activeFileName === fileName ? 'rgba(56, 189, 248, 0.1)' : 'transparent',
+                display: 'flex', alignItems: 'center', gap: '0.5rem', justifyContent: isCollapsed ? 'center' : 'flex-start'
+             }} title={fileName}>
+                <span style={{ color: 'var(--accent)', display: 'flex' }}>📝</span>
+                {!isCollapsed && <span style={{ fontSize: '0.85rem', color: activeFileName === fileName ? 'var(--accent)' : 'var(--text-main)', fontWeight: activeFileName === fileName ? 600 : 400 }}>{fileName}</span>}
+             </div>
+          ))}
+
+          {isCreatingFile && !isCollapsed && (
+            <div style={{
+              padding: '0.4rem 0.5rem', borderRadius: '4px',
+              backgroundColor: 'var(--bg-surface)',
+              display: 'flex', alignItems: 'center', gap: '0.5rem'
+            }}>
+              <span style={{ color: 'var(--accent)', display: 'flex' }}>📝</span>
+              <input
+                autoFocus
+                type="text"
+                value={newFileName}
+                onChange={e => setNewFileName(e.target.value)}
+                onKeyDown={handleKeyDown}
+                onBlur={handleCreateSubmit}
+                placeholder="filename.p4"
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  outline: 'none',
+                  color: 'var(--text-main)',
+                  fontSize: '0.85rem',
+                  width: '100%'
+                }}
+              />
+            </div>
+          )}
+          
+          {files.length === 0 && !isCreatingFile && !isCollapsed && (
+            <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', textAlign: 'center', padding: '1.5rem 0' }}>
+              No files open.
+            </div>
+          )}
         </div>
       </div>
 

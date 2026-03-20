@@ -28,7 +28,8 @@
         "header": "ipv4",
         "status": "Sempre"
       }
-    ]
+    ],
+    "path_id": "2be9001b-95c0-4d22-af94-2b7bb5d71342"
   },
   {
     "input_state": "start [extract ethernet] -> parse_myTunnel [extract myTunnel]",
@@ -59,7 +60,8 @@
         "header": "ipv4",
         "status": "Nunca"
       }
-    ]
+    ],
+    "path_id": "a8a74485-dfaa-426b-ae7a-027061d5b6fa"
   },
   {
     "input_state": "start [extract ethernet] -> parse_ipv4 [extract ipv4] -> MyIngress.ipv4_lpm",
@@ -91,7 +93,8 @@
         "header": "ipv4",
         "status": "Sempre"
       }
-    ]
+    ],
+    "path_id": "1a8505e4-9ac9-4e69-b4fb-1865d3a85797"
   },
   {
     "input_state": "start [extract ethernet]",
@@ -122,6 +125,7 @@
         "header": "ipv4",
         "status": "Nunca"
       }
-    ]
+    ],
+    "path_id": "9c06be9b-58e8-439a-b6c0-7bd06cf3bb84"
   }
 ]
