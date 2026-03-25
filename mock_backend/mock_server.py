@@ -2,7 +2,7 @@
 # Mirrors all endpoints of the real backend/app.py
 # but returns pre-collected mock JSON files instead of running real analysis.
 #
-# Mock files are read from: ../frontendV2/src/mocks/
+# Mock files are read from: ../frontendV2/src/mocks/{scenario}/
 # Runs on port 5001 (real backend uses 5000)
 
 from flask import Flask, request, jsonify
@@ -18,9 +18,16 @@ CORS(app)
 MOCK_DIR = Path(__file__).parent.parent / 'frontendV2' / 'src' / 'mocks'
 RUNTIME_CONFIG = Path(__file__).parent.parent / 'runtime_config.json'
 
+def get_mock_dir():
+    scenario = request.args.get('scenario', 'default')
+    scenario_dir = MOCK_DIR / scenario
+    if not scenario_dir.exists():
+        scenario_dir = MOCK_DIR / 'default'
+    return scenario_dir
+
 def load_mock(filename: str):
-    """Load a JSON mock file by name from MOCK_DIR."""
-    path = MOCK_DIR / filename
+    """Load a JSON mock file by name from the active scenario directory."""
+    path = get_mock_dir() / filename
     if not path.exists():
         return None
     with open(path, 'r') as f:
@@ -28,15 +35,17 @@ def load_mock(filename: str):
 
 def list_snapshots():
     """Return all _output.json files plus parser_states.json, sorted."""
+    active_dir = get_mock_dir()
+    if not active_dir.exists():
+        return []
     files = [
-        f for f in os.listdir(MOCK_DIR)
+        f for f in os.listdir(active_dir)
         if f.endswith('_output.json') or f == 'parser_states.json'
     ]
     files.sort(key=lambda x: (x != 'parser_states.json', x))
     return files
 
 def extract_parser_info(fsm_data):
-    """Mirror of app.py's extract_parser_info helper."""
     if not fsm_data or not fsm_data.get('parsers'):
         return None
     parser = fsm_data['parsers'][0]
@@ -54,7 +63,6 @@ def extract_parser_info(fsm_data):
     }
 
 def derive_components(fsm_data):
-    """Mirror of app.py's get_components logic."""
     components = {
         'parser': None,
         'ingress_tables': [],
@@ -97,13 +105,9 @@ def derive_components(fsm_data):
 
 @app.route('/api/upload/p4', methods=['POST'])
 def upload_p4():
-    """
-    Real backend: accepts .p4 file, compiles with p4c, returns FSM JSON.
-    Mock: ignores the file, returns programa.json as fsm_data.
-    """
     fsm_data = load_mock('programa.json')
     if fsm_data is None:
-        return jsonify({'error': 'Mock file programa.json not found'}), 500
+        return jsonify({'error': 'Mock file programa.json not found in active scenario'}), 500
     return jsonify({
         'message': 'P4 compilado com sucesso (mock)',
         'fsm_data': fsm_data
@@ -112,10 +116,6 @@ def upload_p4():
 
 @app.route('/api/upload/json', methods=['POST'])
 def upload_json():
-    """
-    Real backend: saves uploaded JSON to workspace.
-    Mock: accepts and acknowledges, does nothing.
-    """
     file_type = request.form.get('type', 'unknown')
     filename = request.files.get('file').filename if 'file' in request.files else 'unknown.json'
     return jsonify({
@@ -131,10 +131,6 @@ def upload_json():
 
 @app.route('/api/analyze/parser', methods=['POST'])
 def analyze_parser():
-    """
-    Real backend: runs run_parser.py, returns parser states.
-    Mock: returns parser_states.json.
-    """
     states = load_mock('parser_states.json')
     if states is None:
         return jsonify({'error': 'Mock parser_states.json not found'}), 500
@@ -153,14 +149,18 @@ def analyze_parser():
 
 @app.route('/api/analyze/reachability', methods=['POST'])
 def analyze_reachability():
-    """
-    Real backend: runs path_analyzer.py.
-    Mock: returns static reachability derived from programa.json structure.
-    """
     reachability = {
         'MyIngress.ipv4_lpm': {
             'reachable': True,
-            'conditions': ['hdr.ipv4.isValid() && !hdr.myTunnel.isValid()']
+            'conditions': ['hdr.ipv4.isValid()']
+        },
+        'MyIngress.ipv4_acl': {
+            'reachable': True,
+            'conditions': ['hdr.ipv4.isValid()']
+        },
+        'MyIngress.tcp_exact': {
+            'reachable': True,
+            'conditions': ['hdr.tcp.isValid()']
         },
         'MyIngress.myTunnel_exact': {
             'reachable': True,
@@ -179,13 +179,6 @@ def analyze_reachability():
 
 @app.route('/api/analyze/table', methods=['POST'])
 def analyze_table():
-    """
-    Real backend: runs run_table.py for an Ingress table.
-    Mock: resolves the output filename using the same naming convention as the real
-    backend, then returns that mock file.
-
-    filename = {switch_id}_{table_name.replace('.','_')}_from_{stem(input_states)}_output.json
-    """
     data = request.get_json() or {}
     table_name = data.get('table_name')
     switch_id  = data.get('switch_id', 's1')
@@ -196,20 +189,27 @@ def analyze_table():
     if not input_states_file:
         return jsonify({'error': 'input_states não fornecido'}), 400
 
-    input_stem = Path(input_states_file).stem  # e.g. "parser_states"
-    safe_table = table_name.replace('.', '_')  # e.g. "MyIngress_ipv4_lpm"
+    input_stem = Path(input_states_file).stem
+    safe_table = table_name.replace('.', '_')
     output_filename = f'{switch_id}_{safe_table}_from_{input_stem}_output.json'
 
     output_states = load_mock(output_filename)
     if output_states is None:
-        # Fallback: try without switch_id prefix if not found
         alt_filename = f'{safe_table}_from_{input_stem}_output.json'
         output_states = load_mock(alt_filename)
 
     if output_states is None:
+        alt_filename2 = f'{switch_id}_{safe_table}_from_parser_states_output.json'
+        output_states = load_mock(alt_filename2)
+
+    if output_states is None:
+        alt_filename3 = f'{safe_table}_from_parser_states_output.json'
+        output_states = load_mock(alt_filename3)
+
+    if output_states is None:
         return jsonify({
-            'error': f'Mock não encontrado para tabela "{table_name}" com input "{input_states_file}"',
-            'tried': output_filename
+            'error': f'Mock não encontrado para tabela "{table_name}"',
+            'tried': [output_filename, alt_filename2]
         }), 404
 
     return jsonify({
@@ -222,30 +222,26 @@ def analyze_table():
 
 @app.route('/api/analyze/egress_table', methods=['POST'])
 def analyze_egress_table():
-    """
-    Real backend: runs run_table_egress.py for an Egress table.
-    Mock: same filename resolution as analyze_table.
-    """
     data = request.get_json() or {}
     table_name = data.get('table_name')
     switch_id  = data.get('switch_id', 's1')
     input_states_file = data.get('input_states')
 
-    if not table_name:
-        return jsonify({'error': 'table_name não fornecido'}), 400
-    if not input_states_file:
-        return jsonify({'error': 'input_states não fornecido'}), 400
+    if not table_name or not input_states_file:
+        return jsonify({'error': 'Faltam dados'}), 400
 
     input_stem      = Path(input_states_file).stem
     safe_table      = table_name.replace('.', '_')
     output_filename = f'{switch_id}_{safe_table}_from_{input_stem}_output.json'
 
     output_states = load_mock(output_filename)
+    
     if output_states is None:
-        return jsonify({
-            'error': f'Mock não encontrado para tabela Egress "{table_name}" com input "{input_states_file}"',
-            'tried': output_filename
-        }), 404
+        alt_filename2 = f'{switch_id}_{safe_table}_from_parser_states_output.json'
+        output_states = load_mock(alt_filename2)
+
+    if output_states is None:
+        return jsonify({'error': 'Mock não encontrado'}), 404
 
     return jsonify({
         'message': f'Análise da tabela Egress {table_name} concluída (mock)',
@@ -256,13 +252,8 @@ def analyze_egress_table():
 
 @app.route('/api/analyze/deparser', methods=['POST'])
 def analyze_deparser():
-    """
-    Real backend: runs run_deparser.py.
-    Mock: resolves filename as deparser_output_from_{stem(input_states)}.json
-    """
     data = request.get_json() or {}
     input_states_file = data.get('input_states')
-
     if not input_states_file:
         return jsonify({'error': 'input_states não fornecido'}), 400
 
@@ -271,43 +262,30 @@ def analyze_deparser():
 
     results = load_mock(output_filename)
     if results is None:
-        return jsonify({
-            'error': f'Mock não encontrado para deparser com input "{input_states_file}"',
-            'tried': output_filename
-        }), 404
+        return jsonify({'error': 'Mock não encontrado'}), 404
 
     fsm_data    = load_mock('programa.json') or {}
-    deparsers   = fsm_data.get('deparsers', [{}])
-    deparser_def = deparsers[0] if deparsers else {}
+    deparser_def = fsm_data.get('deparsers', [{}])[0] if fsm_data.get('deparsers') else {}
     static_info = {
         'name': deparser_def.get('name', 'deparser'),
         'order': deparser_def.get('order', [])
     }
 
     return jsonify({
-        'message': f'Análise do Deparser concluída (mock, usando {input_states_file})',
+        'message': 'Análise do Deparser concluída',
         'static_info': static_info,
         'analysis_results': results,
         'output_file': output_filename
     })
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# GENERATE ENDPOINTS
-# ══════════════════════════════════════════════════════════════════════════════
-
 @app.route('/api/generate/rules', methods=['POST'])
 def generate_rules():
-    """
-    Real backend: runs generate_rules.py, returns runtime_config.json.
-    Mock: returns the project's runtime_config.json if present, else a stub.
-    """
-    # Try project-level runtime_config.json first
     if RUNTIME_CONFIG.exists():
         with open(RUNTIME_CONFIG, 'r') as f:
             rules = json.load(f)
     else:
-        rules = {'targets': {}}  # Minimal stub
+        rules = {'targets': {}}
 
     return jsonify({
         'message': 'Regras geradas com sucesso (mock)',
@@ -315,16 +293,8 @@ def generate_rules():
     })
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# INFO ENDPOINTS
-# ══════════════════════════════════════════════════════════════════════════════
-
 @app.route('/api/info/components', methods=['GET'])
 def get_components():
-    """
-    Real backend: reads programa.json from workspace.
-    Mock: reads programa.json from mocks dir.
-    """
     fsm_data = load_mock('programa.json')
     if fsm_data is None:
         return jsonify({'error': 'Mock programa.json not found'}), 404
@@ -333,22 +303,23 @@ def get_components():
 
 @app.route('/api/info/snapshots', methods=['GET'])
 def get_snapshots():
-    """
-    Real backend: lists output/ directory.
-    Mock: lists _output.json files from MOCK_DIR.
-    """
     return jsonify({'snapshots': list_snapshots()})
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# ENTRYPOINT
-# ══════════════════════════════════════════════════════════════════════════════
+@app.route('/api/mock/source', methods=['GET'])
+def get_mock_source():
+    """Retrieve the raw .p4 file for the current scenario."""
+    path = get_mock_dir() / 'programa.p4'
+    if not path.exists():
+        return jsonify({'error': 'Source file not found'}), 404
+    with open(path, 'r') as f:
+        return jsonify({'source': f.read()})
+
 
 if __name__ == '__main__':
     print('=' * 60)
-    print('🟡 P4SymTest MOCK Backend iniciado')
-    print(f'   Mock files: {MOCK_DIR.resolve()}')
+    print('🟡 P4SymTest MOCK Backend (Dynamic Scenario)')
+    print(f'   Base Mocks: {MOCK_DIR.resolve()}')
     print('   Servidor: http://localhost:5001')
-    print('   (porta 5001 — real backend usa 5000)')
     print('=' * 60)
     app.run(debug=True, host='0.0.0.0', port=5001)

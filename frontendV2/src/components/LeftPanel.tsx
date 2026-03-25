@@ -1,6 +1,7 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { FolderTree, Settings, ChevronLeft, ChevronRight, Plus, FolderUp } from 'lucide-react';
 import NetworkConfigModal, { useNetworkConfig } from './NetworkConfigModal';
+import { getApiScenario, setApiScenario, fetchMockSource } from '../lib/api';
 
 export default function LeftPanel({ 
   isCollapsed = false, 
@@ -58,6 +59,17 @@ export default function LeftPanel({
   const totalRoutes = config.switches.reduce(
     (a, s) => a + s.ipv4Routes.length + s.tunnelRoutes.length, 0
   );
+
+  // Auto-load the source code for the current scenario on mount
+  useEffect(() => {
+    if (import.meta.env.DEV) {
+      fetchMockSource()
+        .then(res => {
+          if (res.source) onUploadFile('programa.p4', res.source);
+        })
+        .catch(err => console.error("Could not fetch mock source:", err));
+    }
+  }, []);
 
   return (
     <>
@@ -163,6 +175,24 @@ export default function LeftPanel({
         <Settings size={18} color={showConfig ? 'var(--accent)' : undefined} />
         {!isCollapsed && <span style={{ fontSize: '0.85rem', marginLeft: '0.4rem' }}>Configurations</span>}
       </div>
+
+      {/* ---- Scenario Toggle ---- */}
+      {!isCollapsed && import.meta.env.DEV && (
+        <div style={{ padding: '0.6rem 1rem', borderTop: '1px solid var(--border)', borderBottom: '1px solid var(--border)' }}>
+          <label style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Mock Scenario</label>
+          <select
+            value={getApiScenario()}
+            onChange={(e) => {
+              setApiScenario(e.target.value);
+              window.location.reload();
+            }}
+            style={{ width: '100%', padding: '0.3rem', marginTop: '0.3rem', background: 'var(--bg-surface)', border: '1px solid var(--border)', color: 'var(--text-main)', borderRadius: '4px', fontSize: '0.8rem' }}
+          >
+            <option value="default">Default</option>
+            <option value="custom">Custom Test</option>
+          </select>
+        </div>
+      )}
 
       {/* ---- Config Summary (only when expanded) ---- */}
       {!isCollapsed && (

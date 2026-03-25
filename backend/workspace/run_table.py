@@ -1,7 +1,8 @@
 # run_table.py (Versão Limpa e Corrigida)
 import json
 import sys
-from z3 import *
+import z3
+from z3 import BoolVal, BitVecVal, BitVec, And, Or, Not, If, Solver, sat, unsat, is_false, Extract, ZeroExt, BitVecSort
 import os
 from contextlib import contextmanager
 
@@ -66,39 +67,41 @@ def build_z3_expression_for_conditional(expr_node, fields):
     return BoolVal(True)
 
 _path_cache = {}
-def find_path_to_table(pipeline_data, start_node_name, target_table_name, visited_nodes, fields):
+def find_paths_to_table(pipeline_data, start_node_name, target_table_name, visited_nodes, fields):
     path_key = (start_node_name, target_table_name)
     if path_key in _path_cache: return _path_cache[path_key]
-    if start_node_name == target_table_name: return []
-    if start_node_name is None or start_node_name in visited_nodes: return None
+    if start_node_name == target_table_name: return [[]]
+    if start_node_name is None or start_node_name in visited_nodes: return []
     visited_nodes.add(start_node_name)
 
+    all_paths = []
+    
     table_node = next((t for t in pipeline_data.get('tables', []) if t['name'] == start_node_name), None)
     if table_node:
         next_node = table_node.get('base_default_next')
-        path = find_path_to_table(pipeline_data, next_node, target_table_name, visited_nodes.copy(), fields)
-        if path is not None:
-            _path_cache[path_key] = path
-            return path
+        if next_node:
+            paths = find_paths_to_table(pipeline_data, next_node, target_table_name, visited_nodes.copy(), fields)
+            all_paths.extend(paths)
+            
+        next_tables = table_node.get('next_tables', {})
+        for act_name, next_node_act in next_tables.items():
+            paths = find_paths_to_table(pipeline_data, next_node_act, target_table_name, visited_nodes.copy(), fields)
+            all_paths.extend(paths)
             
     cond_node = next((c for c in pipeline_data.get('conditionals', []) if c['name'] == start_node_name), None)
     if cond_node:
         condition_expr = build_z3_expression_for_conditional(cond_node.get('expression'), fields)
         
-        path_from_false = find_path_to_table(pipeline_data, cond_node.get('false_next'), target_table_name, visited_nodes.copy(), fields)
-        if path_from_false is not None:
-            result = [Not(condition_expr)] + path_from_false
-            _path_cache[path_key] = result
-            return result
+        paths_from_false = find_paths_to_table(pipeline_data, cond_node.get('false_next'), target_table_name, visited_nodes.copy(), fields)
+        for p in paths_from_false:
+            all_paths.append([Not(condition_expr)] + p)
             
-        path_from_true = find_path_to_table(pipeline_data, cond_node.get('true_next'), target_table_name, visited_nodes.copy(), fields)
-        if path_from_true is not None:
-            result = [condition_expr] + path_from_true
-            _path_cache[path_key] = result
-            return result
+        paths_from_true = find_paths_to_table(pipeline_data, cond_node.get('true_next'), target_table_name, visited_nodes.copy(), fields)
+        for p in paths_from_true:
+            all_paths.append([condition_expr] + p)
             
-    _path_cache[path_key] = None
-    return None
+    _path_cache[path_key] = all_paths
+    return all_paths
 
 # --- LÓGICA DE EXECUÇÃO SIMBÓLICA ---
 def build_z3_expression(expr_node, current_fields):
@@ -278,7 +281,12 @@ def execute_symbolic_table(table_def, current_fields, runtime_entries, fsm_data)
                          bitwidth = field_var.size()
                          mask = ((1 << bitwidth) - 1) << (bitwidth - prefix) # Create mask
                          entry_cond = (field_var & mask) == (val & mask)
-                    # Add ternary, range etc. if needed
+                    elif match_type == 'ternary':
+                         val_str, mask_str = match_val_info
+                         val = p4_runtime_value_to_int(val_str, field_var.size())
+                         mask = p4_runtime_value_to_int(mask_str, field_var.size())
+                         entry_cond = (field_var & mask) == (val & mask)
+                    # Add range etc. if needed
                     else:
                         print(f"Warning: Unsupported match type '{match_type}' for field {field_str}")
                         match_cond = BoolVal(False); break
@@ -387,8 +395,8 @@ if __name__ == "__main__":
 
     print(f"Calculando caminho do pipeline até a tabela '{table_name}'...")
     _path_cache.clear()
-    path_conditions = find_path_to_table(ingress_pipeline, ingress_pipeline.get('init_table'), table_name, set(), fields)
-    if path_conditions is None: print(f"AVISO: A tabela '{table_name}' parece ser estruturalmente inalcançável.")
+    all_path_conditions = find_paths_to_table(ingress_pipeline, ingress_pipeline.get('init_table'), table_name, set(), fields)
+    if not all_path_conditions: print(f"AVISO: A tabela '{table_name}' parece ser estruturalmente inalcançável.")
 
     print(f"--- Carregados {len(initial_states)} estados de '{input_states_file}' ---")
     print(f"--- Executando análise modular da tabela '{table_name}' para o SWITCH '{switch_id}' ---")
@@ -401,19 +409,33 @@ if __name__ == "__main__":
         parser_constraints_smt2 = state.get('z3_constraints_smt2', [])
         
         declarations_smt2 = [f"(declare-const {var.sexpr()} (_ BitVec {var.sort().size()}))" for var in fields.values()]
-        parser_assertions = [f"(assert {s})" for s in parser_constraints_smt2]
-        path_assertions = [f"(assert {cond.sexpr()})" for cond in path_conditions] if path_conditions is not None else []
-        full_script = "\n".join(declarations_smt2 + parser_assertions + path_assertions)
         
-        reachability_solver = Solver()
-        try: reachability_solver.from_string(full_script)
-        except Exception as e: print(f"  -> ERRO Z3: Falha ao carregar SMT reachability: {e}. Pulando."); continue
+        # Determine logical reachability across all structural paths
+        path_reachable = False
+        valid_path_conditions = None
+        
+        if not all_path_conditions:
+            print("  -> AVISO: Análise pulada. Pacote NUNCA alcançará a tabela (Sem Caminho Estrutural).")
+            output_states.append(state); continue
+
+        for p_conds in all_path_conditions:
+            parser_assertions = [f"(assert {s})" for s in parser_constraints_smt2]
+            path_assertions = [f"(assert {cond.sexpr()})" for cond in p_conds] if p_conds else []
+            full_script = "\n".join(declarations_smt2 + parser_assertions + path_assertions)
+            reachability_solver = Solver()
+            try: reachability_solver.from_string(full_script)
+            except Exception as e: print(f"  -> ERRO Z3: Falha ao carregar SMT: {e}"); continue
+            
+            if reachability_solver.check() == sat:
+                path_reachable = True
+                valid_path_conditions = p_conds
+                break
 
         print("  --- Verificando Alcançabilidade (Reachability) ---")
-        if reachability_solver.check() == unsat:
+        if not path_reachable:
             print(f"  -> AVISO: Análise pulada. Pacote NUNCA alcançará a tabela '{table_name}'.")
             output_states.append(state); continue
-        else: print("  -> OK: A tabela é alcançável.")
+        else: print("  -> OK: A tabela é alcançável via um caminho válido.")
         
         analysis_solver = Solver()
         main_script = "\n".join(declarations_smt2 + parser_assertions)

@@ -3,7 +3,8 @@
 
 import json
 import sys
-from z3 import *
+import z3
+from z3 import BoolVal, BitVecVal, BitVec, And, Or, Not, If, Solver, sat, unsat, is_false, Extract, ZeroExt, BitVecSort
 
 # --- Funções Auxiliares ---
 
@@ -58,8 +59,15 @@ def find_path_to_table(pipeline_data, start_node_name, target_table_name, visite
     visited_nodes.add(start_node_name)
     table_node = next((t for t in pipeline_data['tables'] if t['name'] == start_node_name), None)
     if table_node:
-        path = find_path_to_table(pipeline_data, table_node.get('base_default_next'), target_table_name, visited_nodes.copy(), fields)
-        if path is not None: _path_cache[path_key] = path; return path
+        default_next = table_node.get('base_default_next')
+        if default_next:
+            path = find_path_to_table(pipeline_data, default_next, target_table_name, visited_nodes.copy(), fields)
+            if path is not None: _path_cache[path_key] = path; return path
+            
+        next_tables = table_node.get('next_tables', {})
+        for action_name, next_node in next_tables.items():
+            path = find_path_to_table(pipeline_data, next_node, target_table_name, visited_nodes.copy(), fields)
+            if path is not None: _path_cache[path_key] = path; return path
     cond_node = next((c for c in pipeline_data['conditionals'] if c['name'] == start_node_name), None)
     if cond_node:
         condition_expr = build_z3_expression_for_conditional(cond_node['expression'], fields)

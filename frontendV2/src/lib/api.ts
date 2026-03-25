@@ -3,8 +3,16 @@
 
 const BASE_URL = (import.meta.env.VITE_API_URL as string | undefined) ?? 'http://localhost:5001/api';
 
+let currentScenario = localStorage.getItem('p4scenario') || 'default';
+export const setApiScenario = (s: string) => {
+  currentScenario = s;
+  localStorage.setItem('p4scenario', s);
+};
+export const getApiScenario = () => currentScenario;
+
 async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(`${BASE_URL}${path}`, options);
+  const symbol = path.includes('?') ? '&' : '?';
+  const res = await fetch(`${BASE_URL}${path}${symbol}scenario=${currentScenario}`, options);
   if (!res.ok) {
     const body = await res.json().catch(() => ({ error: res.statusText }));
     throw new Error(body.error ?? `HTTP ${res.status}`);
@@ -24,6 +32,10 @@ export async function uploadP4(file: Blob, filename = 'programa.p4'): Promise<Up
   const form = new FormData();
   form.append('file', file, filename);
   return apiFetch<UploadP4Result>('/upload/p4', { method: 'POST', body: form });
+}
+
+export async function fetchMockSource(): Promise<{ source: string }> {
+  return apiFetch<{ source: string }>('/mock/source', { method: 'GET' });
 }
 
 // ── Analysis ─────────────────────────────────────────────────────────────────
