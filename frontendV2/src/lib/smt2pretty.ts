@@ -103,13 +103,42 @@ export function parseConstraint(smt: string): ParsedConstraint {
   return { original: smt, isComplex: true };
 }
 
-/**
- * Parse an ITE (if-then-else) SMT2 string into branches.
- * Returns array of { condition: string, result: string }
- */
 export interface IteBranch {
   condition: string;
   result: string;
+}
+
+function splitSexpr(s: string): string[] {
+  const tokens: string[] = [];
+  let depth = 0;
+  let current = '';
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (c === '(') {
+      depth++;
+      current += c;
+    } else if (c === ')') {
+      depth--;
+      current += c;
+      if (depth === 0) {
+        tokens.push(current.trim());
+        current = '';
+      }
+    } else if (/\\s/.test(c)) {
+      if (depth === 0) {
+        if (current.trim()) {
+          tokens.push(current.trim());
+          current = '';
+        }
+      } else {
+        current += c;
+      }
+    } else {
+      current += c;
+    }
+  }
+  if (current.trim()) tokens.push(current.trim());
+  return tokens;
 }
 
 export function parseIte(smt: string, resultField = ''): IteBranch[] | null {
@@ -117,25 +146,77 @@ export function parseIte(smt: string, resultField = ''): IteBranch[] | null {
   let s = smt.trim();
 
   // Strip outer (let ...) wrapper if present
-  const letMatch = s.match(/^\(let \(.*?\)\n?\s*([\s\S]+)\)/s);
+  const letMatch = s.match(/^\\(let\\s+\\(.*?\\)\\s+([\\s\\S]+)\\)$/s);
   if (letMatch) s = letMatch[1].trim();
+  const letMatch2 = s.match(/^\\(let\\s+\\(\\(.*?\\)\\)\\n?\\s*([\\s\\S]+)\\)$/s);
+  if (letMatch2) s = letMatch2[1].trim();
 
   const processIte = (expr: string): void => {
-    const iteMatch = expr.match(/^\(ite \(= ([a-zA-Z0-9_.$]+) (#[xb][0-9a-fA-F]+)\)\s*(#[xb][0-9a-fA-F]+)\s*([\s\S]+)\)$/s);
-    if (!iteMatch) return;
-    const [, condField, condVal, result, rest] = iteMatch;
-    branches.push({
-      condition: `${prettyField(condField)} == ${prettyFieldValue(condVal, condField)}`,
-      result: prettyFieldValue(result, resultField || condField),
-    });
-    if (rest.trim().startsWith('(ite')) {
-      processIte(rest.trim());
-    } else {
-      const elseVal = rest.trim();
+    expr = expr.trim();
+    if (!expr.startsWith('(ite ') || !expr.endsWith(')')) {
       branches.push({
-        condition: 'else',
-        result: elseVal.startsWith('#') ? prettyFieldValue(elseVal, resultField || condField) : elseVal,
+        condition: 'Always',
+        result: expr.startsWith('#') ? prettyFieldValue(expr, resultField) : expr,
       });
+      return;
+    }
+    
+    const inner = expr.substring(4, expr.length - 1).trim();
+    const tokens = splitSexpr(inner);
+    
+    if (tokens.length >= 3) {
+      const cond = tokens[0];
+      const res = tokens[1];
+      const fls = tokens.slice(2).join(' ');
+
+      let prettyCond = cond;
+      const eqMatch = cond.match(/^\\(=\\s+([a-zA-Z0-9_.$]+)\\s+([^\\s()]+)\\)$/);
+      if (eqMatch) {
+        prettyCond = `${prettyField(eqMatch[1])} == ${prettyFieldValue(eqMatch[2], eqMatch[1])}`;
+      } else if (cond.startsWith('(or ')) {
+        const orInner = splitSexpr(cond.substring(4, cond.length - 1));
+        const orItems = orInner.map(c => {
+           const cEq = c.match(/^\\(=\\s+([a-zA-Z0-9_.$]+)\\s+([^\\s()]+)\\)$/);
+           if (cEq) return `${prettyField(cEq[1])} == ${prettyFieldValue(cEq[2], cEq[1])}`;
+           return c;
+        });
+        prettyCond = orItems.join(' OR ');
+      } else if (cond.startsWith('(not ')) {
+        const notInner = cond.substring(5, cond.length - 1).trim();
+        const cEq = notInner.match(/^\\(=\\s+([a-zA-Z0-9_.$]+)\\s+([^\\s()]+)\\)$/);
+        if (cEq) {
+          prettyCond = `${prettyField(cEq[1])} != ${prettyFieldValue(cEq[2], cEq[1])}`;
+        } else {
+          prettyCond = `NOT ${notInner}`;
+        }
+      }
+
+      let formattedRes = res.startsWith('#') ? prettyFieldValue(res, resultField) : res;
+      if (formattedRes.includes('(bvadd #xff ')) {
+         const m = formattedRes.match(/\(bvadd #xff\s+([a-zA-Z0-9_.$]+)\)/);
+         if (m) formattedRes = `${prettyField(m[1])} - 1`;
+      }
+
+      branches.push({
+        condition: prettyCond,
+        result: formattedRes,
+      });
+
+      if (fls.startsWith('(ite')) {
+        processIte(fls);
+      } else if (fls.trim() !== resultField && fls.trim() !== '') {
+        let flsRes = fls.startsWith('#') ? prettyFieldValue(fls, resultField) : fls;
+        if (flsRes.includes('(bvadd #xff ')) {
+           const m = flsRes.match(/\(bvadd #xff\s+([a-zA-Z0-9_.$]+)\)/);
+           if (m) flsRes = `${prettyField(m[1])} - 1`;
+        }
+        branches.push({
+          condition: 'else',
+          result: flsRes,
+        });
+      }
+    } else {
+       branches.push({ condition: 'Always', result: expr });
     }
   };
 

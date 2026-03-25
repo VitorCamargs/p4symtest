@@ -1,0 +1,8 @@
+============================================================
+🟡 P4SymTest MOCK Backend iniciado
+   Mock files: /home/teste/Documents/symtest/p4symtest/frontendV2/src/mocks
+   Servidor: http://localhost:5001
+   (porta 5001 — real backend usa 5000)
+============================================================
+ * Serving Flask app 'mock_server'
+ * Debug mode: on

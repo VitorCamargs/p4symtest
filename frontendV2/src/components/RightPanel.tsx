@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { Activity, ChevronDown, ChevronRight, ArrowRight, CheckCircle2, XCircle, Eye, EyeOff } from 'lucide-react';
-import { parseConstraint, parseIte, prettyField, prettyComplexConstraint } from '../lib/smt2pretty';
+import { parseConstraint, prettyField, prettyFieldValue, prettyComplexConstraint } from '../lib/smt2pretty';
 
 // ── PathItem ──────────────────────────────────────────────────────────────────
 
@@ -155,52 +155,187 @@ const PathItem = ({
 
 // ── FieldUpdatesView ──────────────────────────────────────────────────────────
 
+// --- Evaluator utility for FieldUpdatesView ---
+function splitSmtTokens(s: string): string[] {
+  const tokens: string[] = [];
+  let depth = 0;
+  let current = '';
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (c === '(') { depth++; current += c; }
+    else if (c === ')') {
+      depth--; current += c;
+      if (depth === 0) { tokens.push(current.trim()); current = ''; }
+    }
+    else if (/\s/.test(c)) {
+      if (depth === 0) {
+        if (current.trim()) { tokens.push(current.trim()); current = ''; }
+      } else current += c;
+    } else current += c;
+  }
+  if (current.trim()) tokens.push(current.trim());
+  return tokens;
+}
+
+function evalSExpr(expr: string, bindings: Record<string, string>): string {
+  expr = expr.trim();
+  while(true) {
+    const letM = expr.match(/^\(let\s+\(\(.*?\)\)\n?\s*([\s\S]+)\)$/s) || expr.match(/^\(let\s+\(.*?\)\s+([\s\S]+)\)$/s);
+    if (letM) expr = letM[letM.length - 1].trim();
+    else break;
+  }
+  
+  if (!expr.startsWith('(')) return expr;
+
+  const inner = expr.substring(1, expr.length - 1).trim();
+  const tokens = splitSmtTokens(inner);
+  
+  if (tokens.length === 0) return expr;
+  
+  if (tokens[0] === 'ite') {
+    const cond = evalSExpr(tokens[1], bindings);
+    if (cond === 'true') return evalSExpr(tokens[2], bindings);
+    if (cond === 'false') return evalSExpr(tokens.slice(3).join(' '), bindings);
+    return expr; // Unresolved condition
+  }
+  
+  if (tokens[0] === '=') {
+    const a = evalSExpr(tokens[1], bindings);
+    const b = evalSExpr(tokens[2], bindings);
+    if (bindings[a]) return bindings[a] === b ? 'true' : 'false';
+    if (bindings[b]) return bindings[b] === a ? 'true' : 'false';
+    return 'unknown';
+  }
+  
+  if (tokens[0] === 'or') {
+    let hasUnknown = false;
+    for(let i = 1; i < tokens.length; i++) {
+      const res = evalSExpr(tokens[i], bindings);
+      if (res === 'true') return 'true';
+      if (res !== 'false') hasUnknown = true;
+    }
+    return hasUnknown ? 'unknown' : 'false';
+  }
+  
+  return expr;
+}
+
+function normalizeResult(res: string, targetField: string): string {
+  let r = res.startsWith('#') ? prettyFieldValue(res, targetField) : res;
+  if (r.includes('(bvadd #xff ')) {
+    const m = r.match(/\(bvadd #xff\s+([a-zA-Z0-9_.$]+)\)/);
+    if (m) r = `${prettyField(m[1])} - 1`;
+  }
+  return r;
+}
+
 function FieldUpdatesView({ updates }: { updates: Record<string, string> }) {
   const [showRaw, setShowRaw] = useState(false);
+
+  // 1. Analyze condition variables
+  const subjectValues = new Map<string, Set<string>>();
+  const regex = /\(=\s+([a-zA-Z0-9_.$]+)\s+(#[xb][0-9a-fA-F]+)\)/g;
+  
+  Object.values(updates).forEach(expr => {
+    let m;
+    while ((m = regex.exec(expr)) !== null) {
+      if (!subjectValues.has(m[1])) subjectValues.set(m[1], new Set());
+      subjectValues.get(m[1])!.add(m[2]);
+    }
+  });
+
+  let primarySubject = 'Condition';
+  let maxVals = 0;
+  subjectValues.forEach((vals, subj) => {
+    if (vals.size > maxVals) { maxVals = vals.size; primarySubject = subj; }
+  });
+
+  const columns = Object.keys(updates).map(k => prettyField(k));
+  const rawFields = Object.keys(updates);
+  
+  const rows: { label: string, isElse?: boolean, cells: string[] }[] = [];
+
+  if (!showRaw) {
+    if (maxVals > 0) {
+      // Generate row for each matched value
+      const values = Array.from(subjectValues.get(primarySubject) || []);
+      values.forEach(val => {
+        const bindings = { [primarySubject]: val };
+        const cells = rawFields.map((rf) => {
+           const r = evalSExpr(updates[rf], bindings);
+           return r === rf || (r.includes('ite') && r === updates[rf]) ? 'none' : normalizeResult(r, rf);
+        });
+        rows.push({ label: prettyFieldValue(val, primarySubject), cells });
+      });
+      // Generate else row
+      const elseBindings = { [primarySubject]: '#xUnmatchedValue' };
+      const elseCells = rawFields.map((rf) => {
+         const r = evalSExpr(updates[rf], elseBindings);
+         return r === rf || (r.includes('ite') && r === updates[rf]) ? 'none' : normalizeResult(r, rf);
+      });
+      if (elseCells.some(c => c !== 'none')) {
+        rows.push({ label: 'else', isElse: true, cells: elseCells });
+      }
+    } else {
+      // Unconditional assignment fallback
+      const row = rawFields.map((rf) => normalizeResult(updates[rf], rf));
+      rows.push({ label: 'Always', cells: row });
+    }
+  }
+
+  const pSubjFormat = primarySubject !== 'Condition' ? prettyField(primarySubject) : 'Condition';
+
   return (
     <div style={{ marginBottom: '1rem' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.8rem' }}>
         <strong style={{ color: 'var(--accent)', fontSize: '0.8rem' }}>Field Updates</strong>
         <button onClick={() => setShowRaw(r => !r)} style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.7rem' }}>
           {showRaw ? <EyeOff size={12} /> : <Eye size={12} />} {showRaw ? 'Visual' : 'Raw SMT2'}
         </button>
       </div>
+      
       {showRaw ? (
         <div style={{ background: '#0a0a0a', padding: '0.8rem', borderRadius: '6px', fontFamily: 'monospace', color: '#10b981', fontSize: '0.7rem', overflowX: 'auto', whiteSpace: 'pre' }}>
-          {Object.entries(updates).map(([f, v]) => `${f} = ${v}`).join('\n')}
+          {Object.entries(updates).map(([f, v]) => `${f} = ${v}`).join('\\n')}
         </div>
       ) : (
-        Object.entries(updates).map(([field, expr]) => {
-          const branches = parseIte(expr, field);
-          return (
-            <div key={field} style={{ marginBottom: '0.8rem', border: '1px solid var(--border)', borderRadius: '6px', overflow: 'hidden' }}>
-              <div style={{ background: 'var(--bg-surface)', padding: '0.4rem 0.8rem', borderBottom: '1px solid var(--border)', fontSize: '0.75rem' }}>
-                <span style={{ color: 'var(--text-muted)' }}>field</span>{' '}
-                <code style={{ color: '#94a3b8', fontFamily: 'monospace' }}>{prettyField(field)}</code>
-              </div>
-              {branches ? (
-                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.75rem' }}>
-                  <thead>
-                    <tr style={{ background: 'rgba(255,255,255,0.03)' }}>
-                      <th style={{ padding: '0.3rem 0.8rem', textAlign: 'left', color: 'var(--text-muted)', fontWeight: 600, fontSize: '0.7rem', textTransform: 'uppercase' }}>If</th>
-                      <th style={{ padding: '0.3rem 0.8rem', textAlign: 'left', color: 'var(--text-muted)', fontWeight: 600, fontSize: '0.7rem', textTransform: 'uppercase' }}>Then</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {branches.map((b, bi) => (
-                      <tr key={bi} style={{ borderTop: '1px solid var(--border)', background: b.condition === 'else' ? 'rgba(239,68,68,0.04)' : 'transparent' }}>
-                        <td style={{ padding: '0.35rem 0.8rem', fontFamily: 'monospace', color: b.condition === 'else' ? 'var(--text-muted)' : '#fbbf24', fontSize: '0.75rem' }}>{b.condition}</td>
-                        <td style={{ padding: '0.35rem 0.8rem', fontFamily: 'monospace', color: '#10b981', fontSize: '0.75rem' }}>{b.result}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              ) : (
-                <div style={{ padding: '0.5rem 0.8rem', color: '#94a3b8', fontSize: '0.75rem', fontFamily: 'monospace' }}>{String(expr)}</div>
-              )}
-            </div>
-          );
-        })
+        <div style={{ border: '1px solid var(--border)', borderRadius: '6px', overflow: 'hidden', overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.75rem', minWidth: '400px' }}>
+            <thead>
+              <tr style={{ background: 'var(--bg-surface)', borderBottom: '1px solid var(--border)' }}>
+                <th colSpan={columns.length + 1} style={{ padding: '0.6rem 0.8rem', textAlign: 'center', color: 'var(--text-main)', fontSize: '0.75rem', fontWeight: 600 }}>
+                  <code style={{ color: '#38bdf8', fontFamily: 'monospace', fontWeight: 700, background: 'transparent', fontSize: '0.8rem' }}>{pSubjFormat}</code>
+                </th>
+              </tr>
+              <tr style={{ background: 'rgba(255,255,255,0.03)', borderBottom: '1px solid var(--border)' }}>
+                <th style={{ padding: '0.4rem 0.8rem', textAlign: 'left', color: 'var(--text-muted)', fontWeight: 600, fontSize: '0.7rem', borderRight: '1px solid var(--border)', width: '15%' }}>
+                  {pSubjFormat}
+                </th>
+                {columns.map(c => (
+                  <th key={c} style={{ padding: '0.4rem 0.8rem', textAlign: 'left', color: 'var(--text-muted)', fontWeight: 600, fontSize: '0.7rem', borderRight: '1px solid var(--border)' }}>
+                    {c}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row, i) => (
+                <tr key={i} style={{ borderBottom: i < rows.length - 1 ? '1px solid var(--border)' : 'none', background: row.isElse ? 'rgba(0,0,0,0.1)' : 'transparent' }}>
+                  <td style={{ padding: '0.4rem 0.8rem', borderRight: '1px solid var(--border)', fontFamily: 'monospace', color: row.isElse ? 'var(--text-muted)' : '#fbbf24', fontWeight: row.isElse ? 400 : 700 }}>
+                    {row.label}
+                  </td>
+                  {row.cells.map((cell, ci) => (
+                    <td key={ci} style={{ padding: '0.4rem 0.8rem', borderRight: '1px solid var(--border)', fontFamily: 'monospace', color: cell !== 'none' ? '#10b981' : 'var(--text-muted)', opacity: cell !== 'none' ? 1 : 0.4 }}>
+                       {cell !== 'none' ? (
+                          <span style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>{cell}</span>
+                       ) : 'none'}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </div>
   );
