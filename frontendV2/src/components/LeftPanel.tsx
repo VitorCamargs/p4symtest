@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import { FolderTree, Settings, ChevronLeft, ChevronRight, Plus, FolderUp } from 'lucide-react';
 import NetworkConfigModal, { useNetworkConfig } from './NetworkConfigModal';
 import { getApiScenario, setApiScenario, fetchMockSource } from '../lib/api';
+import type { TableSchema } from '../lib/api';
 
 export default function LeftPanel({ 
   isCollapsed = false, 
@@ -10,7 +11,8 @@ export default function LeftPanel({
   activeFileName = null,
   onCreateFile = () => {},
   onUploadFile = () => {},
-  onSelectFile = () => {}
+  onSelectFile = () => {},
+  tableSchemas = [],
 }: { 
   isCollapsed?: boolean, 
   onToggle?: () => void,
@@ -18,7 +20,8 @@ export default function LeftPanel({
   activeFileName?: string | null,
   onCreateFile?: (name: string) => void,
   onUploadFile?: (name: string, content: string) => void,
-  onSelectFile?: (name: string) => void
+  onSelectFile?: (name: string) => void,
+  tableSchemas?: TableSchema[],
 }) {
   const [showConfig, setShowConfig] = useState(false);
   const { config, setConfig } = useNetworkConfig();
@@ -56,8 +59,8 @@ export default function LeftPanel({
     e.target.value = '';
   };
 
-  const totalRoutes = config.switches.reduce(
-    (a, s) => a + s.ipv4Routes.length + s.tunnelRoutes.length, 0
+  const totalEntries = config.switches.reduce(
+    (a, s) => a + Object.values(s.tables).reduce((t, entries) => t + entries.length, 0), 0
   );
 
   // Auto-load the source code for the current scenario on mount
@@ -209,23 +212,14 @@ export default function LeftPanel({
                 <span style={{ color: 'var(--accent)', fontWeight: 600 }}>{config.switches.length}</span>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem' }}>
-                <span style={{ color: 'var(--text-muted)' }}>IPv4 routes</span>
-                <span style={{ color: 'var(--text-main)' }}>{config.switches.reduce((a, s) => a + s.ipv4Routes.length, 0)}</span>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem' }}>
-                <span style={{ color: 'var(--text-muted)' }}>Tunnel entries</span>
-                <span style={{ color: 'var(--text-main)' }}>{config.switches.reduce((a, s) => a + s.tunnelRoutes.length, 0)}</span>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem' }}>
-                <span style={{ color: 'var(--text-muted)' }}>Egress MACs</span>
-                <span style={{ color: 'var(--text-main)' }}>{config.switches.reduce((a, s) => a + s.egressSmac.length, 0)}</span>
+                <span style={{ color: 'var(--text-muted)' }}>Table entries</span>
+                <span style={{ color: 'var(--text-main)' }}>{totalEntries}</span>
               </div>
               <div
                 style={{ marginTop: '0.2rem', fontSize: '0.7rem', color: 'var(--accent)', display: 'flex', alignItems: 'center', gap: '0.3rem', opacity: 0.8 }}
               >
-                {/* tiny dot indicator */}
-                <span style={{ width: 6, height: 6, borderRadius: '50%', backgroundColor: totalRoutes > 0 ? 'var(--success)' : 'var(--danger)', display: 'inline-block' }} />
-                {totalRoutes > 0 ? 'Configured' : 'Empty — click to edit'}
+                <span style={{ width: 6, height: 6, borderRadius: '50%', backgroundColor: totalEntries > 0 ? 'var(--success)' : 'var(--danger)', display: 'inline-block' }} />
+                {totalEntries > 0 ? 'Configured' : 'Empty — click to edit'}
               </div>
             </div>
           )}
@@ -234,7 +228,12 @@ export default function LeftPanel({
 
       {/* ---- Modal ---- */}
       {showConfig && (
-        <NetworkConfigModal config={config} setConfig={setConfig} onClose={() => setShowConfig(false)} />
+        <NetworkConfigModal
+          config={config}
+          setConfig={setConfig}
+          onClose={() => setShowConfig(false)}
+          tableSchemas={tableSchemas}
+        />
       )}
     </>
   );

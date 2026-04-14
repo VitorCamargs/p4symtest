@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import Editor from '@monaco-editor/react';
-import { Play, Code2, Settings2, Trash2, Loader2 } from 'lucide-react';
-import { uploadP4, analyzeParser, analyzeTable, analyzeEgressTable, analyzeDeparser } from '../lib/api';
+import { Play, Code2, Settings2, Trash2, Loader2, LocateFixed } from 'lucide-react';
+import { uploadP4, analyzeParser, analyzeTable, analyzeEgressTable, analyzeDeparser, getComponents } from '../lib/api';
+import type { SourceInfo } from '../lib/api';
 
 export default function CenterPanel({
   code,
@@ -30,6 +31,80 @@ export default function CenterPanel({
   const [verifyingNode, setVerifyingNode] = useState<string | null>(null);
   const [verifyError, setVerifyError] = useState<string | null>(null);
 
+  const editorRef = useRef<any>(null);
+  const monacoRef = useRef<any>(null);
+  const decorationsRef = useRef<any[]>([]);
+
+  const handleEditorDidMount = (editor: any, monaco: any) => {
+    editorRef.current = editor;
+    monacoRef.current = monaco;
+  };
+
+  // ── Helper to find the matching closing brace line ──────────────────────────
+  const findBlockEndLine = (source: string, startLine: number): number => {
+    const lines = source.split('\n');
+    let openBraces = 0;
+    let foundInitialBrace = false;
+
+    // Scan from the startLine downwards
+    for (let i = startLine - 1; i < lines.length; i++) {
+        const lineStr = lines[i];
+        
+        for (let char of lineStr) {
+            if (char === '{') {
+                openBraces++;
+                foundInitialBrace = true;
+            } else if (char === '}') {
+                openBraces--;
+                if (foundInitialBrace && openBraces === 0) {
+                    return i + 1; // 1-indexed
+                }
+            }
+        }
+        
+        // If we haven't encountered a block brace yet, check if this is an implicit multi-line primitive block (like contiguous assignments).
+        // We traverse downwards until we hit a clear struct/closure keyword or the end of the file.
+        if (!foundInitialBrace) {
+            if (i < lines.length - 1) {
+                // Look ahead to the next line skipping blank lines. If it starts a new major block or a condition, stop.
+                let nextIdx = i + 1;
+                while (nextIdx < lines.length && lines[nextIdx].trim() === '') nextIdx++;
+                
+                if (nextIdx < lines.length) {
+                    const nextLineTrim = lines[nextIdx].trim();
+                    if (nextLineTrim.match(/^(if|else|while|switch|table|action|control|apply)\b/) || nextLineTrim.startsWith('}')) {
+                        return i + 1; // Stop at the current line
+                    }
+                }
+            }
+        }
+    }
+    return startLine; // Fallback
+  };
+
+  const jumpToSource = (info: SourceInfo | undefined) => {
+    if (!info || !editorRef.current || !monacoRef.current) return;
+    const { line } = info;
+    const endLine = findBlockEndLine(code, line);
+
+    editorRef.current.revealLineInCenter(line);
+    editorRef.current.setPosition({ lineNumber: line, column: 1 });
+    
+    decorationsRef.current = editorRef.current.deltaDecorations(
+      decorationsRef.current,
+      [
+        {
+          range: new monacoRef.current.Range(line, 1, endLine, 1),
+          options: {
+            isWholeLine: true,
+            className: 'myLineHighlight',
+          }
+        }
+      ]
+    );
+  };
+
+
   // ── Derive which pipeline a table belongs to from compiledData ──────────────
   const getPipelineName = (tableName: string): string | null => {
     if (!compiledData?.pipelines) return null;
@@ -50,7 +125,9 @@ export default function CenterPanel({
       const blob = new Blob([code], { type: 'text/plain' });
       const result = await uploadP4(blob, 'programa.p4');
       setCompiledData(result.fsm_data);
-      onCompileComplete(result.fsm_data);
+      // Also fetch the enriched components (which includes table_schemas)
+      const components = await getComponents();
+      onCompileComplete({ ...result.fsm_data, ...components });
     } catch (err: any) {
       setCompileError(err.message ?? 'Compile failed');
     } finally {
@@ -113,7 +190,7 @@ export default function CenterPanel({
   };
 
   // ── Sub-component: single structure row ─────────────────────────────────────
-  const StructureItem = ({ type, name }: { type: string, name: string }) => {
+  const StructureItem = ({ type, name, sourceInfo }: { type: string, name: string, sourceInfo?: SourceInfo }) => {
     const isDisabled = type !== 'parser' && executionChain.length === 0;
     const isLoading = verifyingNode === name;
 
@@ -123,7 +200,20 @@ export default function CenterPanel({
         display: 'flex', justifyContent: 'space-between', alignItems: 'center',
         opacity: isDisabled ? 0.6 : 1
       }}>
-        <h4 style={{ margin: 0, color: 'var(--text-main)', fontSize: '0.85rem' }}>{name}</h4>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          <h4 style={{ margin: 0, color: 'var(--text-main)', fontSize: '0.85rem' }}>{name}</h4>
+          {sourceInfo && (
+            <button 
+              onClick={() => jumpToSource(sourceInfo)}
+              title={`Jump to line ${sourceInfo.line}`}
+              style={{
+                background: 'rgba(59, 130, 246, 0.1)', cursor: 'pointer', border: '1px solid rgba(59, 130, 246, 0.4)',
+                color: 'var(--accent)', borderRadius: '4px', padding: '0.2rem', display: 'flex', alignItems: 'center'
+              }}>
+               <LocateFixed size={12} />
+            </button>
+          )}
+        </div>
         <button
           onClick={() => handleVerifyNode(type, name)}
           disabled={isDisabled || !!verifyingNode}
@@ -192,6 +282,7 @@ export default function CenterPanel({
             defaultLanguage="cpp"
             theme="vs-dark"
             value={code}
+            onMount={handleEditorDidMount}
             onChange={(val) => onChangeCode(val || '')}
             options={{ minimap: { enabled: false }, fontSize: 13, padding: { top: 16 } }}
           />
@@ -244,7 +335,7 @@ export default function CenterPanel({
                 <h3 style={{ fontSize: '0.8rem', textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: '0.5rem' }}>Parsers</h3>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                   {compiledData.parsers.map((p: any, idx: number) => (
-                    <StructureItem key={idx} type="parser" name={p.name} />
+                    <StructureItem key={idx} type="parser" name={p.name} sourceInfo={p.source_info} />
                   ))}
                 </div>
               </div>
@@ -256,7 +347,7 @@ export default function CenterPanel({
                 <h3 style={{ fontSize: '0.8rem', textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: '0.5rem' }}>Pipeline: {pipe.name}</h3>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                   {pipe.tables?.map((table: any, idx: number) => (
-                    <StructureItem key={idx} type="table" name={table.name} />
+                    <StructureItem key={idx} type="table" name={table.name} sourceInfo={table.source_info} />
                   ))}
                 </div>
               </div>
@@ -268,7 +359,7 @@ export default function CenterPanel({
                 <h3 style={{ fontSize: '0.8rem', textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: '0.5rem' }}>Deparsers</h3>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                   {compiledData.deparsers.map((d: any, idx: number) => (
-                    <StructureItem key={idx} type="deparser" name={d.name} />
+                    <StructureItem key={idx} type="deparser" name={d.name} sourceInfo={d.source_info} />
                   ))}
                 </div>
               </div>

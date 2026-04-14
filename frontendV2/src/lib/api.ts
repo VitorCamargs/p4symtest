@@ -20,6 +20,38 @@ async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+// ── Shared Types ─────────────────────────────────────────────────────────────
+
+export interface SourceInfo {
+  filename: string;
+  line: number;
+  column: number;
+  source_fragment: string;
+}
+
+export interface TableKey {
+  field: string;
+  target: [string, string];
+  match_type: 'exact' | 'lpm' | 'ternary' | 'range';
+}
+
+export interface TableActionParam {
+  name: string;
+  bitwidth: number;
+}
+
+export interface TableAction {
+  name: string;
+  params: TableActionParam[];
+}
+
+export interface TableSchema {
+  name: string;
+  keys: TableKey[];
+  actions: TableAction[];
+  default_action: string;
+}
+
 // ── Upload ────────────────────────────────────────────────────────────────────
 
 export interface UploadP4Result {
@@ -113,6 +145,7 @@ export interface Components {
   actions: { name: string }[];
   headers: { name: string; type: string }[];
   deparser: { name: string; order: string[] } | null;
+  table_schemas: TableSchema[];
 }
 
 export async function getComponents(): Promise<Components> {

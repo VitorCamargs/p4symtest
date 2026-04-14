@@ -232,7 +232,7 @@
       "id" : 0,
       "source_info" : {
         "filename" : "/app/workspace/p4files/programa.p4",
-        "line" : 239,
+        "line" : 197,
         "column" : 8,
         "source_fragment" : "MyDeparser"
       },
@@ -249,7 +249,7 @@
       "id" : 0,
       "source_info" : {
         "filename" : "/app/workspace/p4files/programa.p4",
-        "line" : 217,
+        "line" : 175,
         "column" : 8,
         "source_fragment" : "update_checksum( ..."
       },
@@ -325,7 +325,7 @@
           ],
           "source_info" : {
             "filename" : "/app/workspace/p4files/programa.p4",
-            "line" : 110,
+            "line" : 107,
             "column" : 8,
             "source_fragment" : "mark_to_drop(standard_metadata)"
           }
@@ -347,7 +347,7 @@
           ],
           "source_info" : {
             "filename" : "/app/workspace/p4files/programa.p4",
-            "line" : 110,
+            "line" : 107,
             "column" : 8,
             "source_fragment" : "mark_to_drop(standard_metadata)"
           }
@@ -382,7 +382,7 @@
           ],
           "source_info" : {
             "filename" : "/app/workspace/p4files/programa.p4",
-            "line" : 115,
+            "line" : 111,
             "column" : 8,
             "source_fragment" : "standard_metadata.egress_spec = port"
           }
@@ -401,7 +401,7 @@
           ],
           "source_info" : {
             "filename" : "/app/workspace/p4files/programa.p4",
-            "line" : 117,
+            "line" : 112,
             "column" : 8,
             "source_fragment" : "hdr.ethernet.srcAddr = hdr.ethernet.dstAddr"
           }
@@ -420,7 +420,7 @@
           ],
           "source_info" : {
             "filename" : "/app/workspace/p4files/programa.p4",
-            "line" : 118,
+            "line" : 113,
             "column" : 8,
             "source_fragment" : "hdr.ethernet.dstAddr = dstAddr"
           }
@@ -462,7 +462,7 @@
           ],
           "source_info" : {
             "filename" : "/app/workspace/p4files/programa.p4",
-            "line" : 120,
+            "line" : 114,
             "column" : 8,
             "source_fragment" : "hdr.ipv4.ttl = hdr.ipv4.ttl - 1"
           }
@@ -493,46 +493,9 @@
           ],
           "source_info" : {
             "filename" : "/app/workspace/p4files/programa.p4",
-            "line" : 137,
+            "line" : 131,
             "column" : 8,
             "source_fragment" : "standard_metadata.egress_spec = port"
-          }
-        }
-      ]
-    },
-    {
-      "name" : "NoAction",
-      "id" : 5,
-      "runtime_data" : [],
-      "primitives" : []
-    },
-    {
-      "name" : "MyEgress.rewrite_src_mac",
-      "id" : 6,
-      "runtime_data" : [
-        {
-          "name" : "smac",
-          "bitwidth" : 48
-        }
-      ],
-      "primitives" : [
-        {
-          "op" : "assign",
-          "parameters" : [
-            {
-              "type" : "field",
-              "value" : ["ethernet", "srcAddr"]
-            },
-            {
-              "type" : "runtime_data",
-              "value" : 0
-            }
-          ],
-          "source_info" : {
-            "filename" : "/app/workspace/p4files/programa.p4",
-            "line" : 183,
-            "column" : 8,
-            "source_fragment" : "hdr.ethernet.srcAddr = smac"
           }
         }
       ]
@@ -544,7 +507,7 @@
       "id" : 0,
       "source_info" : {
         "filename" : "/app/workspace/p4files/programa.p4",
-        "line" : 106,
+        "line" : 103,
         "column" : 8,
         "source_fragment" : "MyIngress"
       },
@@ -555,7 +518,7 @@
           "id" : 0,
           "source_info" : {
             "filename" : "/app/workspace/p4files/programa.p4",
-            "line" : 123,
+            "line" : 117,
             "column" : 10,
             "source_fragment" : "ipv4_lpm"
           },
@@ -593,7 +556,7 @@
           "id" : 1,
           "source_info" : {
             "filename" : "/app/workspace/p4files/programa.p4",
-            "line" : 141,
+            "line" : 134,
             "column" : 10,
             "source_fragment" : "myTunnel_exact"
           },
@@ -633,7 +596,7 @@
           "id" : 0,
           "source_info" : {
             "filename" : "/app/workspace/p4files/programa.p4",
-            "line" : 156,
+            "line" : 147,
             "column" : 12,
             "source_fragment" : "hdr.ipv4.isValid() && !hdr.myTunnel.isValid()"
           },
@@ -680,7 +643,7 @@
           "id" : 1,
           "source_info" : {
             "filename" : "/app/workspace/p4files/programa.p4",
-            "line" : 161,
+            "line" : 152,
             "column" : 12,
             "source_fragment" : "hdr.myTunnel.isValid()"
           },
@@ -705,76 +668,14 @@
       "id" : 1,
       "source_info" : {
         "filename" : "/app/workspace/p4files/programa.p4",
-        "line" : 177,
+        "line" : 163,
         "column" : 8,
         "source_fragment" : "MyEgress"
       },
-      "init_table" : "node_8",
-      "tables" : [
-        {
-          "name" : "MyEgress.egress_port_smac",
-          "id" : 2,
-          "source_info" : {
-            "filename" : "/app/workspace/p4files/programa.p4",
-            "line" : 187,
-            "column" : 10,
-            "source_fragment" : "egress_port_smac"
-          },
-          "key" : [
-            {
-              "match_type" : "exact",
-              "name" : "standard_metadata.egress_port",
-              "target" : ["standard_metadata", "egress_port"],
-              "mask" : null
-            }
-          ],
-          "match_type" : "exact",
-          "type" : "simple",
-          "max_size" : 256,
-          "with_counters" : false,
-          "support_timeout" : false,
-          "direct_meters" : null,
-          "action_ids" : [6, 5],
-          "actions" : ["MyEgress.rewrite_src_mac", "NoAction"],
-          "base_default_next" : null,
-          "next_tables" : {
-            "MyEgress.rewrite_src_mac" : null,
-            "NoAction" : null
-          },
-          "default_entry" : {
-            "action_id" : 5,
-            "action_const" : false,
-            "action_data" : [],
-            "action_entry_const" : false
-          }
-        }
-      ],
+      "init_table" : null,
+      "tables" : [],
       "action_profiles" : [],
-      "conditionals" : [
-        {
-          "name" : "node_8",
-          "id" : 2,
-          "source_info" : {
-            "filename" : "/app/workspace/p4files/programa.p4",
-            "line" : 204,
-            "column" : 12,
-            "source_fragment" : "hdr.ethernet.isValid()"
-          },
-          "expression" : {
-            "type" : "expression",
-            "value" : {
-              "op" : "d2b",
-              "left" : null,
-              "right" : {
-                "type" : "field",
-                "value" : ["ethernet", "$valid$"]
-              }
-            }
-          },
-          "false_next" : null,
-          "true_next" : "MyEgress.egress_port_smac"
-        }
-      ]
+      "conditionals" : []
     }
   ],
   "checksums" : [
@@ -783,7 +684,7 @@
       "id" : 0,
       "source_info" : {
         "filename" : "/app/workspace/p4files/programa.p4",
-        "line" : 217,
+        "line" : 175,
         "column" : 8,
         "source_fragment" : "update_checksum( ..."
       },

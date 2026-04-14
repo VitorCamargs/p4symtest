@@ -62,6 +62,46 @@ def extract_parser_info(fsm_data):
         ]
     }
 
+def _action_name_by_id(fsm_data, action_id):
+    """Look up an action name by its integer id."""
+    if action_id is None:
+        return 'NoAction'
+    for a in fsm_data.get('actions', []):
+        if a.get('id') == action_id:
+            return a.get('name', 'NoAction')
+    return 'NoAction'
+
+
+def _table_schema(table_def, fsm_data):
+    """Extract a concise schema for a table: its match keys, available actions, and default action."""
+    default_action_id = table_def.get('default_entry', {}).get('action_id')
+    # Collect unique action runtime params for each action
+    actions = []
+    for a_name in table_def.get('actions', []):
+        action_def = next((a for a in fsm_data.get('actions', []) if a['name'] == a_name), None)
+        params = []
+        if action_def:
+            params = [
+                {'name': p['name'], 'bitwidth': p['bitwidth']}
+                for p in action_def.get('runtime_data', [])
+            ]
+        actions.append({'name': a_name, 'params': params})
+
+    return {
+        'name': table_def.get('name'),
+        'keys': [
+            {
+                'field': k.get('name'),
+                'target': k.get('target'),
+                'match_type': k.get('match_type', 'exact'),
+            }
+            for k in table_def.get('key', [])
+        ],
+        'actions': actions,
+        'default_action': _action_name_by_id(fsm_data, default_action_id),
+    }
+
+
 def derive_components(fsm_data):
     components = {
         'parser': None,
@@ -69,7 +109,8 @@ def derive_components(fsm_data):
         'egress_tables': [],
         'actions': [],
         'headers': [],
-        'deparser': None
+        'deparser': None,
+        'table_schemas': [],
     }
     if fsm_data.get('parsers'):
         p = fsm_data['parsers'][0]
@@ -84,7 +125,10 @@ def derive_components(fsm_data):
         elif pipeline.get('name') == 'egress':
             key = 'egress_tables'
         if key:
-            components[key] = [{'name': t.get('name')} for t in pipeline.get('tables', [])]
+            tables = pipeline.get('tables', [])
+            components[key] = [{'name': t.get('name')} for t in tables]
+            for t in tables:
+                components['table_schemas'].append(_table_schema(t, fsm_data))
     components['actions'] = [{'name': a.get('name')} for a in fsm_data.get('actions', [])]
     components['headers'] = [
         {'name': h.get('name'), 'type': h.get('header_type')}

@@ -43,3 +43,9 @@ body {
 ::-webkit-scrollbar-thumb:hover {
   background: var(--text-muted);
 }
+
+/* Monaco Editor Syntax Highlighting Custom Classes */
+.myLineHighlight {
+  background-color: rgba(59, 130, 246, 0.25) !important;
+  border-left: 3px solid var(--accent) !important;
+}

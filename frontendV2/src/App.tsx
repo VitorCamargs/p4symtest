@@ -133,6 +133,7 @@ function App() {
           onCreateFile={handleCreateFile}
           onUploadFile={handleUploadFile}
           onSelectFile={setActiveFileName}
+          tableSchemas={compiledData?.table_schemas ?? []}
         />
       </div>
 
