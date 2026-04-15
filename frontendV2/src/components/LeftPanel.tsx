@@ -24,7 +24,7 @@ export default function LeftPanel({
   tableSchemas?: TableSchema[],
 }) {
   const [showConfig, setShowConfig] = useState(false);
-  const { config, setConfig } = useNetworkConfig();
+  const { config, setConfig } = useNetworkConfig(tableSchemas);
 
   const [isCreatingFile, setIsCreatingFile] = useState(false);
   const [newFileName, setNewFileName] = useState('');

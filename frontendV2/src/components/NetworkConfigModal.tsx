@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect, Fragment } from 'react';
 import { X, Plus, Trash2, Router, Network, ChevronDown, ChevronRight } from 'lucide-react';
 import type { TableSchema, TableAction, TableKey } from '../lib/api';
 
@@ -35,17 +35,25 @@ const btnBase: React.CSSProperties = {
 
 // ── Header row generator ──────────────────────────────────────────────────────
 
+function isMappableField(fieldName: string): boolean {
+  const f = fieldName.toLowerCase();
+  return (
+    f.includes('addr') || f.includes('ip') || f.includes('mac') ||
+    f.includes('port') || f.includes('spec') || f.includes('egress') ||
+    f.includes('tunnel') || f.includes('id') || f.includes('prefix') ||
+    f.includes('class')
+  );
+}
+
 function colsForSchema(schema: TableSchema): string[] {
   const matchCols: string[] = [];
   schema.keys.forEach(k => {
+    if (!isMappableField(k.field)) return;
     matchCols.push(k.field);
     if (k.match_type === 'lpm') matchCols.push(`${k.field}/prefix`);
-    if (k.match_type === 'ternary') matchCols.push(`${k.field} (mask)`);
   });
-  const actionCols = ['Action'];
-  const allParamNames = new Set<string>();
-  schema.actions.forEach(a => a.params.forEach(p => allParamNames.add(p.name)));
-  return [...matchCols, ...actionCols, ...Array.from(allParamNames)];
+  
+  return [...matchCols, 'Action & Parameters'];
 }
 
 // ── Dynamic row ───────────────────────────────────────────────────────────────
@@ -60,11 +68,12 @@ function EntryRow({
 }) {
   const setMatch = (field: string, val: string) =>
     onChange({ ...entry, match: { ...entry.match, [field]: val } });
-  const setMask = (field: string, val: string) =>
-    onChange({ ...entry, matchMask: { ...(entry.matchMask ?? {}), [field]: val } });
+
   const setPrefix = (field: string, val: number) =>
     onChange({ ...entry, matchPrefix: { ...(entry.matchPrefix ?? {}), [field]: val } });
+  
   const setAction = (val: string) => onChange({ ...entry, action: val, action_params: {} });
+
   const setParam = (name: string, val: string) =>
     onChange({ ...entry, action_params: { ...entry.action_params, [name]: val } });
 
@@ -72,13 +81,13 @@ function EntryRow({
 
   return (
     <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
-      {/* Match key columns */}
-      {schema.keys.map((k: TableKey) => (
-        <>
-          <td key={k.field} style={cellStyle}>
+      {/* Match key columns - only show mappable ones */}
+      {schema.keys.filter(k => isMappableField(k.field)).map((k: TableKey) => (
+        <Fragment key={k.field}>
+          <td style={cellStyle}>
             <input style={inputStyle} value={entry.match[k.field] ?? ''}
               onChange={e => setMatch(k.field, e.target.value)}
-              placeholder={k.match_type === 'lpm' ? '10.0.0.0' : k.match_type === 'ternary' ? '0x0a000001' : '0'} />
+              placeholder="symbolic" />
           </td>
           {k.match_type === 'lpm' && (
             <td key={`${k.field}/prefix`} style={{ ...cellStyle, width: '60px' }}>
@@ -87,33 +96,31 @@ function EntryRow({
                 onChange={e => setPrefix(k.field, +e.target.value)} />
             </td>
           )}
-          {k.match_type === 'ternary' && (
-            <td key={`${k.field}_mask`} style={cellStyle}>
-              <input style={inputStyle} value={entry.matchMask?.[k.field] ?? ''}
-                onChange={e => setMask(k.field, e.target.value)}
-                placeholder="0xffffffff" />
-            </td>
-          )}
-        </>
+
+        </Fragment>
       ))}
 
-      {/* Action selector */}
       <td style={cellStyle}>
-        <select style={{ ...inputStyle, cursor: 'pointer' }} value={entry.action} onChange={e => setAction(e.target.value)}>
-          {schema.actions.map(a => (
-            <option key={a.name} value={a.name}>{a.name.replace(/^.*\./, '')}</option>
-          ))}
-        </select>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', width: '100%' }}>
+          <select value={entry.action} onChange={e => setAction(e.target.value)} style={{ ...inputStyle, width: 'auto', minWidth: '150px', flexShrink: 0, padding: '2px' }}>
+            {schema.actions.map(a => <option key={a.name} value={a.name}>{a.name}</option>)}
+          </select>
+          
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', flexGrow: 1 }}>
+            {chosenAction?.params.map(p => (
+              <div key={p.name} style={{ display: 'flex', alignItems: 'center', gap: '4px', background: 'rgba(255,255,255,0.03)', padding: '2px 6px', borderRadius: '4px', flexGrow: 1, minWidth: '100px' }}>
+                <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>{p.name}:</span>
+                <input 
+                  style={{ ...inputStyle, width: '100%', background: 'transparent', border: 'none', borderBottom: '1px solid rgba(255,255,255,0.1)' }} 
+                  value={entry.action_params[p.name] ?? ''}
+                  onChange={e => setParam(p.name, e.target.value)}
+                  placeholder="symbolic" 
+                />
+              </div>
+            ))}
+          </div>
+        </div>
       </td>
-
-      {/* Action params */}
-      {chosenAction?.params.map(p => (
-        <td key={p.name} style={cellStyle}>
-          <input style={inputStyle} value={entry.action_params[p.name] ?? ''}
-            onChange={e => setParam(p.name, e.target.value)}
-            placeholder={p.name} />
-        </td>
-      ))}
 
       <td style={cellStyle}>
         <button onClick={onRemove} style={{ ...btnBase, color: 'var(--danger)' }}>
@@ -172,11 +179,26 @@ function TableSection({
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem' }}>
               <thead>
                 <tr style={{ borderBottom: '1px solid var(--border)' }}>
-                  {cols.map(c => (
-                    <th key={c} style={{ ...cellStyle, color: 'var(--text-muted)', fontSize: '0.72rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em', textAlign: 'left', whiteSpace: 'nowrap' }}>
-                      {c.replace(/^.*\./, '').replace('/prefix', ' /len')}
-                    </th>
-                  ))}
+                  {cols.map(c => {
+                    // Decide labeling based on field relationships
+                    const isMatch = schema.keys.some(k => 
+                      k.field === c || 
+                      `${k.field}/prefix` === c || 
+                      `${k.field} (mask)` === c
+                    );
+                    const isAction = c === 'Action & Parameters';
+                    const isParam = !isMatch && !isAction;
+
+                    let baseLabel = c.replace(/^.*\./, '').replace('/prefix', ' /len');
+                    if (isMatch) baseLabel = `MATCH: ${baseLabel}`;
+                    if (isParam) baseLabel = `PARAM: ${baseLabel}`;
+                    
+                    return (
+                      <th key={c} style={{ ...cellStyle, color: isMatch ? 'var(--accent)' : 'var(--text-muted)', fontSize: '0.72rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em', textAlign: 'left', whiteSpace: 'nowrap' }}>
+                        {baseLabel}
+                      </th>
+                    );
+                  })}
                   <th style={{ ...cellStyle, width: '32px' }} />
                 </tr>
               </thead>
@@ -250,8 +272,34 @@ function SwitchSection({
 
 // ── Hooks ─────────────────────────────────────────────────────────────────────
 
-export function useNetworkConfig() {
-  const [config, setConfig] = useState<NetworkConfig>({ numSwitches: 1, switches: [{ id: 's1', tables: {} }] });
+import type { TopologyNode, TopologyEdge } from './TopologyDiagram';
+import TopologyDiagram, { defaultNodes, defaultEdges } from './TopologyDiagram';
+import { autoPopulateTables } from '../lib/autoPopulate';
+
+export interface TopologyConfig {
+  nodes: TopologyNode[];
+  edges: TopologyEdge[];
+  switches: Array<{ id: string; tables: SwitchTableConfig }>;
+}
+
+export function useNetworkConfig(tableSchemas: TableSchema[] = []) {
+  const [config, setConfig] = useState<TopologyConfig>(() => ({
+    nodes: defaultNodes,
+    edges: defaultEdges,
+    switches: autoPopulateTables(defaultNodes, defaultEdges, [], tableSchemas),
+  }));
+
+  // Re-populate when schemas arrive (e.g. after compiling a P4 file)
+  const schemasKey = tableSchemas.map(s => s.name).join(',');
+  useEffect(() => {
+    if (!tableSchemas.length) return;
+    setConfig(prev => ({
+      ...prev,
+      switches: autoPopulateTables(prev.nodes, prev.edges, [], tableSchemas),
+    }));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [schemasKey]);
+
   return { config, setConfig };
 }
 
@@ -260,20 +308,29 @@ export function useNetworkConfig() {
 export default function NetworkConfigModal({
   config, setConfig, onClose, tableSchemas,
 }: {
-  config: NetworkConfig;
-  setConfig: (c: NetworkConfig) => void;
+  config: TopologyConfig;
+  setConfig: (c: TopologyConfig) => void;
+
   onClose: () => void;
   tableSchemas: TableSchema[];
 }) {
   const updateSwitch = (i: number, sw: { id: string; tables: SwitchTableConfig }) =>
     setConfig({ ...config, switches: config.switches.map((s, idx) => idx === i ? sw : s) });
 
-  const removeSwitch = (i: number) =>
-    setConfig({ ...config, switches: config.switches.filter((_, idx) => idx !== i) });
+  const removeSwitch = (i: number) => {
+    // We should also remove the node from the diagram if a switch is removed from the bottom!
+    const targetSw = config.switches[i];
+    const newNodes = config.nodes.filter(n => n.id !== targetSw.id);
+    const newEdges = config.edges.filter(e => e.source !== targetSw.id && e.target !== targetSw.id);
+    setConfig({ ...config, nodes: newNodes, edges: newEdges, switches: config.switches.filter((_, idx) => idx !== i) });
+  };
 
-  const addSwitch = () => {
-    const nextId = `s${config.switches.length + 1}`;
-    setConfig({ ...config, switches: [...config.switches, { id: nextId, tables: {} }] });
+  const handleNodesChange = (nodes: TopologyNode[]) => {
+    setConfig({ ...config, nodes, switches: autoPopulateTables(nodes, config.edges, config.switches, tableSchemas) });
+  };
+
+  const handleEdgesChange = (edges: TopologyEdge[]) => {
+    setConfig({ ...config, edges, switches: autoPopulateTables(config.nodes, edges, config.switches, tableSchemas) });
   };
 
   const totalEntries = config.switches.reduce(
@@ -298,7 +355,7 @@ export default function NetworkConfigModal({
             <div>
               <div style={{ fontWeight: 700, fontSize: '1rem', color: 'var(--text-main)' }}>Network Configuration</div>
               <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                Tables are generated from the loaded P4 program · equivalent to runtime_config.json
+                Design your network topology to auto-generate basic routing tables from the loaded P4 program
               </div>
             </div>
           </div>
@@ -313,26 +370,28 @@ export default function NetworkConfigModal({
         </div>
 
         {/* Body */}
-        <div style={{ overflowY: 'auto', flex: 1, padding: '1.2rem 1.5rem' }}>
-          {tableSchemas.length === 0 && (
-            <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
-              No table schemas loaded. Please compile/upload a P4 program first.
-            </div>
-          )}
-          {config.switches.map((sw, i) => (
-            <SwitchSection
-              key={sw.id} sw={sw} schemas={tableSchemas}
-              onUpdate={s => updateSwitch(i, s)} onRemove={() => removeSwitch(i)}
-            />
-          ))}
-          <button onClick={addSwitch} style={{
-            width: '100%', background: 'transparent', border: '1px dashed var(--border)',
-            color: 'var(--accent)', padding: '0.7rem', borderRadius: '8px',
-            cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
-            gap: '0.5rem', fontSize: '0.85rem', fontWeight: 600,
-          }}>
-            <Plus size={16} /> Add Switch
-          </button>
+        <div style={{ overflowY: 'auto', flex: 1, padding: '1.2rem 1.5rem', display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+          
+          <TopologyDiagram 
+            nodes={config.nodes} 
+            edges={config.edges} 
+            onNodesChange={handleNodesChange} 
+            onEdgesChange={handleEdgesChange} 
+          />
+
+          <div>
+            {tableSchemas.length === 0 && (
+              <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+                No table schemas loaded. Please compile/upload a P4 program first.
+              </div>
+            )}
+            {config.switches.map((sw, i) => (
+              <SwitchSection
+                key={sw.id} sw={sw} schemas={tableSchemas}
+                onUpdate={s => updateSwitch(i, s)} onRemove={() => removeSwitch(i)}
+              />
+            ))}
+          </div>
         </div>
 
         {/* Footer */}
