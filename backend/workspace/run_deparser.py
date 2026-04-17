@@ -1,6 +1,7 @@
 # run_deparser.py (Corrected Z3 boolean check + Optimizer metadata preservation)
 import json
 import sys
+import z3
 from z3 import *
 import os
 from contextlib import contextmanager
@@ -36,6 +37,34 @@ def load_json(filename):
     except Exception as e:
         print(f"Erro inesperado ao carregar '{filename}': {e}")
         exit(1)
+
+def parse_field_update_expr(expr_str, decls, target_var):
+    """
+    Parses a field-update term by wrapping it into an equality with target_var.
+    This avoids AstVector-empty results when expr_str is only a term.
+    """
+    wrapped = f"(assert (= {target_var.sexpr()} {expr_str}))"
+    parsed = parse_smt2_string(wrapped, decls=decls)
+    if isinstance(parsed, z3.AstVector):
+        if len(parsed) != 1:
+            raise ValueError(f"SMT field update produced {len(parsed)} assertions (expected 1)")
+        parsed = parsed[0]
+    if not isinstance(parsed, z3.BoolRef) or not z3.is_eq(parsed):
+        raise ValueError(f"Wrapped SMT update is not an equality: {type(parsed).__name__}")
+
+    left = parsed.arg(0)
+    right = parsed.arg(1)
+    if z3.eq(left, target_var):
+        candidate = right
+    elif z3.eq(right, target_var):
+        candidate = left
+    elif left.sort() == target_var.sort():
+        candidate = left
+    elif right.sort() == target_var.sort():
+        candidate = right
+    else:
+        raise ValueError("Could not isolate field-update expression with matching sort")
+    return candidate
 
 # --- Ponto de Entrada Principal ---
 if __name__ == "__main__":
@@ -186,7 +215,8 @@ if __name__ == "__main__":
                  field_key=tuple(parts) if len(parts)==2 else (parts[1],parts[2]) if len(parts)==3 else None
                  if field_key and field_key in fields:
                      try:
-                         update_constraint = (fields[field_key] == parse_smt2_string(expr_str, decls=decls))
+                         parsed_expr = parse_field_update_expr(expr_str, decls=decls, target_var=fields[field_key])
+                         update_constraint = (fields[field_key] == parsed_expr)
                          solver.add(update_constraint)
                      except Exception as e: 
                          print(f"    - Erro field_update {field_str}: {e}")

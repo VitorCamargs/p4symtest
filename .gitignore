@@ -1,0 +1,6 @@
+# Material de suporte técnico alinhado ao artigo (não versionar)
+/NOMS_2026___Camera_ready/
+
+# Artefatos de execução Python
+__pycache__/
+*.pyc

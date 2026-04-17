@@ -2,11 +2,12 @@ services:
   # Backend Flask com p4c
   backend:
     build: ./backend  # <-- Diz ao compose para construir o Dockerfile em ./backend
+    platform: linux/amd64
     container_name: p4symtest-backend
     working_dir: /app
     # O 'command' agora está dentro do Dockerfile (CMD)
     ports:
-      - "5000:5000"
+      - "${BACKEND_HOST_PORT:-5000}:5000"
     volumes:
       - ./backend:/app  # <-- Ainda montamos para live-reload do código
       - ./backend/workspace:/app/workspace
@@ -22,7 +23,7 @@ services:
 
   # Frontend React
   frontend:
-    image: node:18-alpine
+    image: node:22-alpine
     container_name: p4symtest-frontend
     working_dir: /app
     command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
@@ -32,13 +33,29 @@ services:
       - ./frontendV2:/app
       - /app/node_modules
     environment:
-      - VITE_API_URL=http://backend:5000/api
+      - VITE_API_URL=http://localhost:${BACKEND_HOST_PORT:-5000}/api
+      - VITE_API_MODE=real
     networks:
       - p4symtest-network
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     stdin_open: true
     tty: true
+
+  # Mock backend opcional para testes locais de UI (não usado na transição para backend real)
+  mock-backend:
+    image: python:3.11-slim
+    container_name: p4symtest-mock-backend
+    profiles: ["mock"]
+    working_dir: /app
+    command: sh -c "pip install --no-cache-dir -r /app/mock_backend/requirements.txt && python /app/mock_backend/mock_server.py"
+    ports:
+      - "5001:5001"
+    volumes:
+      - ./:/app
+    networks:
+      - p4symtest-network
 
 networks:
   p4symtest-network:

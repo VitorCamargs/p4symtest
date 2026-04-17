@@ -165,7 +165,7 @@ def analyze_parser():
         return jsonify({'error': 'FSM não encontrado (programa.json). Faça upload primeiro.'}), 400
 
     output_path = OUTPUT_DIR / 'parser_states.json'
-    cmd = f'python3 run_parser.py {output_path}'
+    cmd = f'python3 run_parser.py {fsm_path} {output_path}'
     result = run_command(cmd)
 
     if not result['success']:
@@ -194,6 +194,43 @@ def extract_parser_info(fsm_data):
         'name': parser.get('name', 'Parser'),
         'init_state': parser.get('init_state'),
         'states': [{'name': s.get('name'), 'operations': len(s.get('parser_ops', [])), 'transitions': len(s.get('transitions', []))} for s in parser.get('parse_states', [])]
+    }
+
+def action_name_by_id(fsm_data, action_id):
+    """Resolve o nome da ação a partir do id no FSM."""
+    if action_id is None:
+        return 'NoAction'
+    for action in fsm_data.get('actions', []):
+        if action.get('id') == action_id:
+            return action.get('name', 'NoAction')
+    return 'NoAction'
+
+def table_schema_from_def(table_def, fsm_data):
+    """Extrai o schema de uma tabela para a configuração dinâmica no frontend."""
+    default_action_id = table_def.get('default_entry', {}).get('action_id')
+    actions = []
+    for action_name in table_def.get('actions', []):
+        action_def = next((a for a in fsm_data.get('actions', []) if a.get('name') == action_name), None)
+        params = []
+        if action_def:
+            params = [
+                {'name': p.get('name'), 'bitwidth': p.get('bitwidth')}
+                for p in action_def.get('runtime_data', [])
+            ]
+        actions.append({'name': action_name, 'params': params})
+
+    return {
+        'name': table_def.get('name'),
+        'keys': [
+            {
+                'field': key.get('name'),
+                'target': key.get('target'),
+                'match_type': key.get('match_type', 'exact'),
+            }
+            for key in table_def.get('key', [])
+        ],
+        'actions': actions,
+        'default_action': action_name_by_id(fsm_data, default_action_id),
     }
 
 # ============================================
@@ -516,12 +553,24 @@ def get_components():
     fsm_data = load_json_file(fsm_path)
     if not fsm_data: return jsonify({'error': 'FSM não encontrado ou inválido (programa.json)'}), 404
 
-    components = {'parser': None, 'ingress_tables': [], 'egress_tables': [], 'actions': [], 'headers': [], 'deparser': None}
+    components = {
+        'parser': None,
+        'ingress_tables': [],
+        'egress_tables': [],
+        'actions': [],
+        'headers': [],
+        'deparser': None,
+        'table_schemas': [],
+    }
     if fsm_data.get('parsers'):
         p = fsm_data['parsers'][0]; components['parser'] = {'name': p.get('name', 'P'), 'states': len(p.get('parse_states', []))}
     for p in fsm_data.get('pipelines', []):
         key = 'ingress_tables' if p.get('name') == 'ingress' else 'egress_tables' if p.get('name') == 'egress' else None
-        if key: components[key] = [{'name': t.get('name')} for t in p.get('tables', [])]
+        if key:
+            tables = p.get('tables', [])
+            components[key] = [{'name': t.get('name')} for t in tables]
+            for table in tables:
+                components['table_schemas'].append(table_schema_from_def(table, fsm_data))
     components['actions'] = [{'name': a.get('name')} for a in fsm_data.get('actions', [])]
     components['headers'] = [{'name': h.get('name'), 'type': h.get('header_type')} for h in fsm_data.get('headers', [])]
     if fsm_data.get('deparsers'):
@@ -542,6 +591,23 @@ def get_snapshots():
         # Retorna apenas o default se houver erro ao listar o diretório
         return jsonify({'snapshots': ['parser_states.json']})
 
+@app.route('/api/mock/source', methods=['GET'])
+def get_mock_source():
+    """Compatibilidade com o fluxo legado da V2 em modo mock/dev."""
+    candidate_paths = [
+        P4FILES_DIR / 'programa.p4',
+        WORKSPACE_DIR / 'programa.p4',
+        WORKSPACE_DIR / 'custom_test.p4',
+    ]
+    for source_path in candidate_paths:
+        if source_path.exists():
+            try:
+                with open(source_path, 'r') as f:
+                    return jsonify({'source': f.read(), 'filename': source_path.name})
+            except Exception as e:
+                return jsonify({'error': f'Falha ao ler arquivo fonte: {e}'}), 500
+    return jsonify({'error': 'Source file not found'}), 404
+
 # ============================================
 # SERVIDOR
 # ============================================
@@ -555,4 +621,3 @@ if __name__ == '__main__':
     print("*"*60)
     # Habilita debug e reloader para desenvolvimento. Para produção, use um servidor WSGI.
     app.run(debug=True, host='0.0.0.0', port=5000)
-

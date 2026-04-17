@@ -2,11 +2,29 @@ import { useState, useEffect, useCallback } from 'react';
 import LeftPanel from './components/LeftPanel';
 import CenterPanel from './components/CenterPanel';
 import RightPanel from './components/RightPanel';
+import type { TopologyConfig } from './components/NetworkConfigModal';
 import './App.css';
 
+type VerificationTarget = { type: string; name: string } | null;
+
+type StageSnapshot = {
+  chain: string[];
+  outputFile: string | null;
+  verification: VerificationTarget;
+  result: any;
+  parentIndex: number | null;
+};
+
+const EMPTY_STAGE: StageSnapshot = {
+  chain: [],
+  outputFile: null,
+  verification: null,
+  result: null,
+  parentIndex: null,
+};
+
 function App() {
-  const [activeVerification, setActiveVerification] = useState<{ type: string, name: string } | null>(null);
-  const [executionChain, setExecutionChain] = useState<string[]>([]);
+  const [networkConfig, setNetworkConfig] = useState<TopologyConfig | null>(null);
 
   // Full FSM data from last compile (needed by RightPanel for conditionals lookup)
   const [compiledData, setCompiledData] = useState<any>(null);
@@ -43,12 +61,19 @@ function App() {
 
   const activeCode = files.find(f => f.name === activeFileName)?.content || '';
 
-  // Tracks the output_file from the last API response so the next analysis
-  // can use it as input_states.
-  const [lastOutputFile, setLastOutputFile] = useState<string | null>(null);
+  // Stage history: each successful verify creates a new selectable snapshot.
+  const [stageHistory, setStageHistory] = useState<StageSnapshot[]>([EMPTY_STAGE]);
+  const [currentStageIndex, setCurrentStageIndex] = useState(0);
 
-  // The raw API response for the active verification (paths, states, etc.)
-  const [verificationResult, setVerificationResult] = useState<any>(null);
+  const currentStage = stageHistory[currentStageIndex] ?? EMPTY_STAGE;
+  const executionChain = currentStage.chain;
+  const lastOutputFile = currentStage.outputFile;
+  const activeVerification = currentStage.verification;
+  const verificationResult = currentStage.result;
+  const parentVerificationResult =
+    currentStage.parentIndex !== null && currentStage.parentIndex >= 0 && currentStage.parentIndex < stageHistory.length
+      ? stageHistory[currentStage.parentIndex]?.result ?? null
+      : null;
 
   // Left panel is toggled between 15vw and 60px
   const [isLeftCollapsed, setIsLeftCollapsed] = useState(false);
@@ -105,18 +130,42 @@ function App() {
     outputFile: string,
     result: any
   ) => {
-    setActiveVerification({ type, name });
-    setLastOutputFile(outputFile);
-    setVerificationResult(result);
+    const shortName = name.split('.').pop() || name;
+    const stepLabel = type === 'parser'
+      ? 'Parser'
+      : type === 'deparser'
+        ? 'Deparser'
+        : shortName;
+
+    const baseStage = stageHistory[currentStageIndex] ?? EMPTY_STAGE;
+    const nextChain = type === 'parser' ? [stepLabel] : [...baseStage.chain, stepLabel];
+    const nextStage: StageSnapshot = {
+      chain: nextChain,
+      outputFile,
+      verification: { type, name },
+      result,
+      parentIndex: currentStageIndex,
+    };
+
+    // Keep full history across branches: never discard prior stages when
+    // verifying from an earlier point in the chain.
+    setStageHistory((prev) => {
+      const next = [...prev, nextStage];
+      setCurrentStageIndex(next.length - 1);
+      return next;
+    });
   };
 
   // Reset the whole chain when the user clears it.
   const handleClearChain = () => {
-    setExecutionChain([]);
-    setLastOutputFile(null);
-    setVerificationResult(null);
-    setActiveVerification(null);
+    setStageHistory([EMPTY_STAGE]);
+    setCurrentStageIndex(0);
     // compiledData is kept — user can still see structures after clearing chain
+  };
+
+  const handleSelectStage = (index: number) => {
+    if (index < 0 || index >= stageHistory.length) return;
+    setCurrentStageIndex(index);
   };
 
   return (
@@ -134,6 +183,7 @@ function App() {
           onUploadFile={handleUploadFile}
           onSelectFile={setActiveFileName}
           tableSchemas={compiledData?.table_schemas ?? []}
+          onConfigChange={setNetworkConfig}
         />
       </div>
 
@@ -145,9 +195,12 @@ function App() {
           onVerificationComplete={handleVerificationComplete}
           onCompileComplete={setCompiledData}
           executionChain={executionChain}
-          setExecutionChain={setExecutionChain}
+          stageHistory={stageHistory}
+          currentStageIndex={currentStageIndex}
+          onSelectStage={handleSelectStage}
           lastOutputFile={lastOutputFile}
           onClearChain={handleClearChain}
+          networkConfig={networkConfig}
         />
       </div>
 
@@ -181,6 +234,7 @@ function App() {
         <RightPanel
           activeVerification={activeVerification}
           verificationResult={verificationResult}
+          parentVerificationResult={parentVerificationResult}
           compiledData={compiledData}
         />
       </div>

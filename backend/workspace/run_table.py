@@ -2,7 +2,7 @@
 import json
 import sys
 import z3
-from z3 import BoolVal, BitVecVal, BitVec, And, Or, Not, If, Solver, sat, unsat, is_false, Extract, ZeroExt, BitVecSort
+from z3 import BoolVal, BitVecVal, BitVec, And, Or, Not, If, Solver, sat, unsat, is_false, Extract, ZeroExt, BitVecSort, parse_smt2_string, simplify, UGT, ULT, UGE, ULE
 import os
 from contextlib import contextmanager
 
@@ -46,25 +46,192 @@ def p4_runtime_value_to_int(value_str, bitwidth):
         # print(f"Warning: Could not convert P4 value '{value_str}' to int: {e}")
         return 0 # Return 0 on failure
 
+def sanitize_symbol_name(name):
+    return ''.join(ch if ch.isalnum() else '_' for ch in str(name))
+
+def is_symbolic_token(value):
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return value.strip().lower() in {'', 'symbolic', 'sym', '__symbolic__', '*', 'auto', 'default'}
+    return False
+
+def parse_field_update_expr(expr_str, decls, target_var):
+    """
+    Parses a field-update term by wrapping it into an equality with target_var.
+    This avoids AstVector-empty results when expr_str is only a term.
+    """
+    wrapped = f"(assert (= {target_var.sexpr()} {expr_str}))"
+    parsed = parse_smt2_string(wrapped, decls=decls)
+    if isinstance(parsed, z3.AstVector):
+        if len(parsed) != 1:
+            raise ValueError(f"SMT field update produced {len(parsed)} assertions (expected 1)")
+        parsed = parsed[0]
+    if not isinstance(parsed, z3.BoolRef) or not z3.is_eq(parsed):
+        raise ValueError(f"Wrapped SMT update is not an equality: {type(parsed).__name__}")
+
+    left = parsed.arg(0)
+    right = parsed.arg(1)
+    if z3.eq(left, target_var):
+        candidate = right
+    elif z3.eq(right, target_var):
+        candidate = left
+    elif left.sort() == target_var.sort():
+        candidate = left
+    elif right.sort() == target_var.sort():
+        candidate = right
+    else:
+        raise ValueError("Could not isolate field-update expression with matching sort")
+    return candidate
+
 # --- LÓGICA DE ANÁLISE DE FLUXO DE CONTROLE ---
-def build_z3_expression_for_conditional(expr_node, fields):
-    if not expr_node: return BoolVal(True)
-    if expr_node.get('type') == 'expression':
-        return build_z3_expression_for_conditional(expr_node['value'], fields)
-    op = expr_node.get('op')
-    if not op: return BoolVal(True)
-    if op == 'd2b':
-        field_val = expr_node['right']['value']
-        key = tuple(field_val) if len(field_val) == 2 else (field_val[1], field_val[2])
-        field_var = fields.get(key)
-        return field_var == 1 if field_var is not None else BoolVal(False)
-    elif op == 'not':
-        return Not(build_z3_expression_for_conditional(expr_node['right'], fields))
-    elif op == 'and':
-        left = build_z3_expression_for_conditional(expr_node['left'], fields)
-        right = build_z3_expression_for_conditional(expr_node['right'], fields)
-        return And(left, right)
+def _field_key_from_node_value(field_val):
+    if not isinstance(field_val, (list, tuple)):
+        return None
+    if len(field_val) == 2:
+        return tuple(field_val)
+    if len(field_val) >= 3:
+        return (field_val[-2], field_val[-1])
+    return None
+
+def _to_boolref(value):
+    if isinstance(value, z3.BoolRef):
+        return value
+    if isinstance(value, bool):
+        return BoolVal(value)
+    if isinstance(value, int):
+        return BoolVal(value != 0)
+    if isinstance(value, z3.BitVecRef):
+        if value.size() == 1:
+            return value == BitVecVal(1, 1)
+        return value != BitVecVal(0, value.size())
     return BoolVal(True)
+
+def _coerce_for_comparison(left, right):
+    if isinstance(left, bool):
+        left = BoolVal(left)
+    if isinstance(right, bool):
+        right = BoolVal(right)
+
+    if isinstance(left, z3.BoolRef) or isinstance(right, z3.BoolRef):
+        return _to_boolref(left), _to_boolref(right), 'bool'
+
+    if isinstance(left, z3.BitVecRef) and isinstance(right, int):
+        right = BitVecVal(right, left.size())
+    if isinstance(right, z3.BitVecRef) and isinstance(left, int):
+        left = BitVecVal(left, right.size())
+
+    if isinstance(left, int) and isinstance(right, int):
+        return left, right, 'int'
+
+    if isinstance(left, z3.BitVecRef) and isinstance(right, z3.BitVecRef):
+        left_size = left.size()
+        right_size = right.size()
+        if left_size != right_size:
+            if left_size > right_size:
+                right = ZeroExt(left_size - right_size, right)
+            else:
+                left = ZeroExt(right_size - left_size, left)
+        return left, right, 'bv'
+
+    return left, right, 'unknown'
+
+def _compare_terms(op, left, right):
+    left, right, kind = _coerce_for_comparison(left, right)
+
+    if kind == 'bool':
+        if op == '==':
+            return left == right
+        if op == '!=':
+            return left != right
+        return BoolVal(False)
+
+    if kind == 'int':
+        if op == '==':
+            return BoolVal(left == right)
+        if op == '!=':
+            return BoolVal(left != right)
+        if op == '>':
+            return BoolVal(left > right)
+        if op == '<':
+            return BoolVal(left < right)
+        if op == '>=':
+            return BoolVal(left >= right)
+        if op == '<=':
+            return BoolVal(left <= right)
+        return BoolVal(False)
+
+    if kind == 'bv':
+        if op == '==':
+            return left == right
+        if op == '!=':
+            return left != right
+        if op == '>':
+            return UGT(left, right)
+        if op == '<':
+            return ULT(left, right)
+        if op == '>=':
+            return UGE(left, right)
+        if op == '<=':
+            return ULE(left, right)
+        return BoolVal(False)
+
+    if op == '==':
+        return left == right if isinstance(left, z3.ExprRef) and isinstance(right, z3.ExprRef) else BoolVal(False)
+    if op == '!=':
+        return left != right if isinstance(left, z3.ExprRef) and isinstance(right, z3.ExprRef) else BoolVal(False)
+    return BoolVal(True)
+
+def _build_conditional_term(expr_node, fields):
+    if not expr_node:
+        return BoolVal(True)
+
+    node_type = expr_node.get('type')
+    if node_type == 'expression':
+        return _build_conditional_term(expr_node.get('value'), fields)
+    if node_type == 'field':
+        key = _field_key_from_node_value(expr_node.get('value'))
+        return fields.get(key)
+    if node_type == 'hexstr':
+        try:
+            return int(expr_node.get('value', '0'), 16)
+        except Exception:
+            return 0
+    if node_type in ('bool', 'boolean'):
+        value = expr_node.get('value')
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.strip().lower() == 'true'
+        return bool(value)
+
+    op = expr_node.get('op')
+    if not op:
+        return None
+
+    if op == 'd2b':
+        right_term = _build_conditional_term(expr_node.get('right'), fields)
+        return _to_boolref(right_term)
+    if op == 'not':
+        right_term = _build_conditional_term(expr_node.get('right'), fields)
+        return Not(_to_boolref(right_term))
+    if op == 'and':
+        left_term = _build_conditional_term(expr_node.get('left'), fields)
+        right_term = _build_conditional_term(expr_node.get('right'), fields)
+        return And(_to_boolref(left_term), _to_boolref(right_term))
+    if op == 'or':
+        left_term = _build_conditional_term(expr_node.get('left'), fields)
+        right_term = _build_conditional_term(expr_node.get('right'), fields)
+        return Or(_to_boolref(left_term), _to_boolref(right_term))
+    if op in ('==', '!=', '>', '<', '>=', '<='):
+        left_term = _build_conditional_term(expr_node.get('left'), fields)
+        right_term = _build_conditional_term(expr_node.get('right'), fields)
+        return _compare_terms(op, left_term, right_term)
+
+    return BoolVal(True)
+
+def build_z3_expression_for_conditional(expr_node, fields):
+    return _to_boolref(_build_conditional_term(expr_node, fields))
 
 _path_cache = {}
 def find_paths_to_table(pipeline_data, start_node_name, target_table_name, visited_nodes, fields):
@@ -146,7 +313,7 @@ def build_z3_expression(expr_node, current_fields):
             
     return None
 
-def apply_symbolic_action(action_name, action_params, current_fields, fsm_data):
+def apply_symbolic_action(action_name, action_params, current_fields, fsm_data, symbol_scope='global'):
     action_def = next((a for a in fsm_data['actions'] if a['name'] == action_name), None)
     if not action_def: return {}
     modified_fields = {}
@@ -183,7 +350,13 @@ def apply_symbolic_action(action_name, action_params, current_fields, fsm_data):
                 param_name = param_def['name']
                 param_bitwidth = param_def['bitwidth']
                 concrete_val = action_params.get(param_name)
-                if concrete_val is not None:
+                if is_symbolic_token(concrete_val):
+                    sym_name = sanitize_symbol_name(
+                        f"sym__{param_name}__{symbol_scope}__{action_name}__{dest_key[0]}_{dest_key[1]}"
+                    )
+                    source_val = BitVec(sym_name, param_bitwidth)
+                    source_bitwidth = param_bitwidth
+                elif concrete_val is not None:
                     try:
                         int_val = p4_runtime_value_to_int(concrete_val, param_bitwidth)
                         source_val = BitVecVal(int_val, param_bitwidth)
@@ -254,10 +427,10 @@ def execute_symbolic_table(table_def, current_fields, runtime_entries, fsm_data)
 
     # Executa simbolicamente para cada campo modificável
     for field_key in modifiable_fields:
-        default_mods = apply_symbolic_action(default_action_name, {}, current_fields, fsm_data)
+        default_mods = apply_symbolic_action(default_action_name, {}, current_fields, fsm_data, symbol_scope='default')
         final_expr = default_mods.get(field_key, current_fields.get(field_key))
         
-        for entry in reversed(entries):
+        for entry_idx, entry in enumerate(reversed(entries)):
             match_cond = BoolVal(True)
             for field_str, match_val_info in entry.get('match', {}).items():
                 parts = field_str.split('.')
@@ -273,19 +446,42 @@ def execute_symbolic_table(table_def, current_fields, runtime_entries, fsm_data)
                 entry_cond = None
                 try:
                     if match_type == 'exact':
-                        val = p4_runtime_value_to_int(match_val_info, field_var.size())
-                        entry_cond = (field_var == BitVecVal(val, field_var.size()))
+                        if is_symbolic_token(match_val_info):
+                            sym_name = sanitize_symbol_name(f"match_{table_def.get('name', 'table')}_{field_str}_{entry_idx}")
+                            entry_cond = (field_var == BitVec(sym_name, field_var.size()))
+                        else:
+                            val = p4_runtime_value_to_int(match_val_info, field_var.size())
+                            entry_cond = (field_var == BitVecVal(val, field_var.size()))
                     elif match_type == 'lpm':
+                         if (not isinstance(match_val_info, (list, tuple)) or len(match_val_info) != 2):
+                             match_cond = BoolVal(False); break
                          val_str, prefix = match_val_info
-                         val = p4_runtime_value_to_int(val_str, field_var.size())
-                         bitwidth = field_var.size()
-                         mask = ((1 << bitwidth) - 1) << (bitwidth - prefix) # Create mask
-                         entry_cond = (field_var & mask) == (val & mask)
+                         if is_symbolic_token(val_str) or is_symbolic_token(prefix):
+                             entry_cond = BoolVal(True)
+                         else:
+                             prefix_int = int(prefix)
+                             val = p4_runtime_value_to_int(val_str, field_var.size())
+                             bitwidth = field_var.size()
+                             if prefix_int <= 0:
+                                 entry_cond = BoolVal(True)
+                             elif prefix_int >= bitwidth:
+                                 entry_cond = (field_var == BitVecVal(val, bitwidth))
+                             else:
+                                 shift = bitwidth - prefix_int
+                                 mask_int = ((1 << bitwidth) - 1) ^ ((1 << shift) - 1)
+                                 mask_bv = BitVecVal(mask_int, bitwidth)
+                                 entry_cond = (field_var & mask_bv) == (BitVecVal(val, bitwidth) & mask_bv)
                     elif match_type == 'ternary':
+                         if (not isinstance(match_val_info, (list, tuple)) or len(match_val_info) != 2):
+                             match_cond = BoolVal(False); break
                          val_str, mask_str = match_val_info
-                         val = p4_runtime_value_to_int(val_str, field_var.size())
-                         mask = p4_runtime_value_to_int(mask_str, field_var.size())
-                         entry_cond = (field_var & mask) == (val & mask)
+                         if is_symbolic_token(val_str) or is_symbolic_token(mask_str):
+                             entry_cond = BoolVal(True)
+                         else:
+                             val = p4_runtime_value_to_int(val_str, field_var.size())
+                             mask = p4_runtime_value_to_int(mask_str, field_var.size())
+                             mask_bv = BitVecVal(mask, field_var.size())
+                             entry_cond = (field_var & mask_bv) == (BitVecVal(val, field_var.size()) & mask_bv)
                     # Add range etc. if needed
                     else:
                         print(f"Warning: Unsupported match type '{match_type}' for field {field_str}")
@@ -301,7 +497,14 @@ def execute_symbolic_table(table_def, current_fields, runtime_entries, fsm_data)
 
             if is_false(match_cond): continue
             
-            entry_mods = apply_symbolic_action(entry.get('action', 'NoAction'), entry.get('action_params', {}), current_fields, fsm_data)
+            entry_scope = f"entry_{entry_idx}_{table_def.get('name', 'table')}"
+            entry_mods = apply_symbolic_action(
+                entry.get('action', 'NoAction'),
+                entry.get('action_params', {}),
+                current_fields,
+                fsm_data,
+                symbol_scope=entry_scope
+            )
             value_if_match = entry_mods.get(field_key, current_fields.get(field_key))
 
             # --- CORRECAO: Ensure both sides of If are Z3 expressions with same sort ---
@@ -418,8 +621,8 @@ if __name__ == "__main__":
             print("  -> AVISO: Análise pulada. Pacote NUNCA alcançará a tabela (Sem Caminho Estrutural).")
             output_states.append(state); continue
 
+        parser_assertions = [f"(assert {s})" for s in parser_constraints_smt2]
         for p_conds in all_path_conditions:
-            parser_assertions = [f"(assert {s})" for s in parser_constraints_smt2]
             path_assertions = [f"(assert {cond.sexpr()})" for cond in p_conds] if p_conds else []
             full_script = "\n".join(declarations_smt2 + parser_assertions + path_assertions)
             reachability_solver = Solver()
@@ -438,7 +641,8 @@ if __name__ == "__main__":
         else: print("  -> OK: A tabela é alcançável via um caminho válido.")
         
         analysis_solver = Solver()
-        main_script = "\n".join(declarations_smt2 + parser_assertions)
+        chosen_path_assertions = [f"(assert {cond.sexpr()})" for cond in valid_path_conditions] if valid_path_conditions else []
+        main_script = "\n".join(declarations_smt2 + parser_assertions + chosen_path_assertions)
         try: analysis_solver.from_string(main_script)
         except Exception as e: print(f"  -> ERRO Z3: Falha ao carregar SMT principal: {e}. Pulando."); continue
         
@@ -449,7 +653,11 @@ if __name__ == "__main__":
                 parts = field_str.split('.'); field_key = tuple(parts) if len(parts)==2 else (parts[1],parts[2]) if len(parts)==3 else None
                 if field_key and field_key in current_symbolic_fields:
                     try: 
-                        with suppress_c_stdout_stderr(): current_symbolic_fields[field_key] = parse_smt2_string(expr_str, decls=decls)
+                        target_var = fields.get(field_key)
+                        if target_var is None:
+                            continue
+                        with suppress_c_stdout_stderr():
+                            current_symbolic_fields[field_key] = parse_field_update_expr(expr_str, decls=decls, target_var=target_var)
                     except Exception as e: print(f"Erro ao parsear SMT para {field_str}: {e}")
         
         target_table_def = next((t for t in ingress_pipeline.get('tables', []) if t['name'] == table_name), None)
@@ -482,15 +690,25 @@ if __name__ == "__main__":
                 analysis_solver.pop()
 
         new_constraints = list(state.get('z3_constraints_smt2', []))
+        if valid_path_conditions:
+            for cond in valid_path_conditions:
+                cond_smt = cond.sexpr()
+                if cond_smt not in new_constraints:
+                    new_constraints.append(cond_smt)
         if egress_spec is not None:
-            no_drop_constraint = (egress_spec != 511)
-            analysis_solver.push(); analysis_solver.add(no_drop_constraint)
-            if analysis_solver.check() == sat:
-                new_constraints.append(no_drop_constraint.sexpr())
-                print("\n  --- Propagação para Próximo Estágio ---"); print("  -> Otimização: Adicionada restrição de não descarte.")
+            if isinstance(egress_spec, z3.ExprRef):
+                drop_value = BitVecVal(511, egress_spec.size()) if isinstance(egress_spec, z3.BitVecRef) else 511
+                no_drop_constraint = (egress_spec != drop_value)
+                analysis_solver.push(); analysis_solver.add(no_drop_constraint)
+                if analysis_solver.check() == sat:
+                    new_constraints.append(no_drop_constraint.sexpr())
+                    print("\n  --- Propagação para Próximo Estágio ---"); print("  -> Otimização: Adicionada restrição de não descarte.")
+                else:
+                    print("\n  --- Propagação para Próximo Estágio ---"); print("  -> AVISO: Todos os pacotes deste estado são descartados."); continue 
+                analysis_solver.pop()
             else:
-                print("\n  --- Propagação para Próximo Estágio ---"); print("  -> AVISO: Todos os pacotes deste estado são descartados."); continue 
-            analysis_solver.pop()
+                print("\n  --- Propagação para Próximo Estágio ---")
+                print("  -> AVISO: egress_spec não é expressão Z3; otimização de não-descarte ignorada.")
         
         field_updates = state.get("field_updates", {}).copy()
         for field_key, val_expr in final_symbolic_fields.items():

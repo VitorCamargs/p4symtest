@@ -1,0 +1,204 @@
+{
+  "s1": {
+    "tbl_programa177": [],
+    "MyIngress.ipv4_lpm": [
+      {
+        "match": {
+          "hdr.ipv4.dstAddr": [
+            "10.0.1.10",
+            32
+          ]
+        },
+        "action": "MyIngress.ipv4_forward",
+        "action_params": {
+          "dstAddr": "00:00:00:00:01:00",
+          "port": "1"
+        }
+      },
+      {
+        "match": {
+          "hdr.ipv4.dstAddr": [
+            "10.0.2.0",
+            24
+          ]
+        },
+        "action": "MyIngress.ipv4_forward",
+        "action_params": {
+          "dstAddr": "00:aa:bb:cc:dd:02",
+          "port": "2"
+        }
+      }
+    ],
+    "MyIngress.ipv4_acl": [
+      {
+        "match": {
+          "hdr.ipv4.srcAddr": [
+            "0.0.0.0",
+            "0.0.0.0"
+          ],
+          "hdr.ipv4.dstAddr": [
+            "10.0.1.10",
+            "255.255.255.255"
+          ]
+        },
+        "action": "MyIngress.set_class",
+        "action_params": {
+          "r_class": "10"
+        }
+      },
+      {
+        "match": {
+          "hdr.ipv4.srcAddr": [
+            "0.0.0.0",
+            "0.0.0.0"
+          ],
+          "hdr.ipv4.dstAddr": [
+            "10.0.2.0",
+            "255.255.255.0"
+          ]
+        },
+        "action": "MyIngress.set_class",
+        "action_params": {
+          "r_class": "50"
+        }
+      }
+    ],
+    "MyIngress.tcp_exact": [
+      {
+        "match": {
+          "hdr.tcp.srcPort": "1",
+          "hdr.tcp.dstPort": "1"
+        },
+        "action": "MyIngress.modify_port",
+        "action_params": {}
+      },
+      {
+        "match": {
+          "hdr.tcp.srcPort": "2",
+          "hdr.tcp.dstPort": "2"
+        },
+        "action": "MyIngress.modify_port",
+        "action_params": {}
+      }
+    ],
+    "MyEgress.egress_port_smac": [
+      {
+        "match": {
+          "standard_metadata.egress_port": "1"
+        },
+        "action": "MyEgress.rewrite_src_mac",
+        "action_params": {
+          "smac": "00:aa:bb:cc:dd:01"
+        }
+      },
+      {
+        "match": {
+          "standard_metadata.egress_port": "2"
+        },
+        "action": "MyEgress.rewrite_src_mac",
+        "action_params": {
+          "smac": "00:aa:bb:cc:dd:01"
+        }
+      }
+    ]
+  },
+  "s2": {
+    "tbl_programa177": [],
+    "MyIngress.ipv4_lpm": [
+      {
+        "match": {
+          "hdr.ipv4.dstAddr": [
+            "10.0.1.0",
+            24
+          ]
+        },
+        "action": "MyIngress.ipv4_forward",
+        "action_params": {
+          "dstAddr": "00:aa:bb:cc:dd:01",
+          "port": "1"
+        }
+      },
+      {
+        "match": {
+          "hdr.ipv4.dstAddr": [
+            "10.0.2.10",
+            32
+          ]
+        },
+        "action": "MyIngress.ipv4_forward",
+        "action_params": {
+          "dstAddr": "00:00:00:00:02:00",
+          "port": "2"
+        }
+      }
+    ],
+    "MyIngress.ipv4_acl": [
+      {
+        "match": {
+          "hdr.ipv4.srcAddr": [
+            "0.0.0.0",
+            "0.0.0.0"
+          ],
+          "hdr.ipv4.dstAddr": [
+            "10.0.1.0",
+            "0.0.0.0"
+          ]
+        },
+        "action": "MyIngress.set_class",
+        "action_params": {}
+      },
+      {
+        "match": {
+          "hdr.ipv4.srcAddr": [
+            "0.0.0.0",
+            "0.0.0.0"
+          ],
+          "hdr.ipv4.dstAddr": [
+            "10.0.2.10",
+            "0.0.0.0"
+          ]
+        },
+        "action": "MyIngress.set_class",
+        "action_params": {}
+      }
+    ],
+    "MyIngress.tcp_exact": [
+      {
+        "match": {
+          "hdr.tcp.srcPort": "1",
+          "hdr.tcp.dstPort": "1"
+        },
+        "action": "MyIngress.modify_port",
+        "action_params": {}
+      },
+      {
+        "match": {
+          "hdr.tcp.srcPort": "2",
+          "hdr.tcp.dstPort": "2"
+        },
+        "action": "MyIngress.modify_port",
+        "action_params": {}
+      }
+    ],
+    "MyEgress.egress_port_smac": [
+      {
+        "match": {
+          "standard_metadata.egress_port": "1"
+        },
+        "action": "MyEgress.rewrite_src_mac",
+        "action_params": {
+          "smac": "00:aa:bb:cc:dd:02"
+        }
+      },
+      {
+        "match": {
+          "standard_metadata.egress_port": "2"
+        },
+        "action": "MyEgress.rewrite_src_mac",
+        "action_params": {
+          "smac": "00:aa:bb:cc:dd:02"
+        }
+      }
+    ]
+  }
+}

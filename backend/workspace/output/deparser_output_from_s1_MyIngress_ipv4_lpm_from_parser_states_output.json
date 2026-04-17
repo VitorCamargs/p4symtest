@@ -74,9 +74,9 @@
       "(= ethernet.$valid$ #b1)",
       "(= myTunnel.$valid$ #b0)",
       "(= ipv4.$valid$ #b1)",
-      "(let ((a!1 (ite (= ipv4.dstAddr #x0a000001)\n                #b000000001\n                (ite (= ipv4.dstAddr #x0a000002)\n                     #b000000010\n                     (ite (= ipv4.dstAddr #x0a000003) #b000000011 #b111111111)))))\n  (distinct a!1 #b111111111))"
+      "(let ((a!1 (ite (= ipv4.dstAddr #x0a00010a)\n                #b000000001\n                (ite (= ((_ extract 31 8) ipv4.dstAddr) #x0a0002)\n                     #b000000010\n                     #b111111111))))\n  (distinct a!1 #b111111111))"
     ],
-    "non_drop_condition_smt": null,
+    "non_drop_condition_smt": "(distinct (ite (= ipv4.dstAddr #x0a00010a)\n     #b000000001\n     (ite (= ((_ extract 31 8) ipv4.dstAddr) #x0a0002) #b000000010 #b111111111)) #x1ff)",
     "satisfiable": true,
     "emission_status": [
       {

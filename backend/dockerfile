@@ -15,9 +15,12 @@ RUN apt-get update && \
 # Crie o diretório de trabalho
 WORKDIR /app
 
+# Copie apenas as dependências para melhor cache de build
+COPY requirements.txt /app/requirements.txt
+
 # Instale as dependências Python
 # (Usamos os nomes do seu docker-compose)
-RUN pip3 install Flask flask-cors z3-solver networkx pydot
+RUN pip3 install -r requirements.txt
 
 # Copie seu aplicativo para o contêiner
 # O volume no docker-compose irá sobrepor isso,

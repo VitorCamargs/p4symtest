@@ -1,8 +1,9 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import Editor from '@monaco-editor/react';
-import { Play, Code2, Settings2, Trash2, Loader2, LocateFixed } from 'lucide-react';
-import { uploadP4, analyzeParser, analyzeTable, analyzeEgressTable, analyzeDeparser, getComponents } from '../lib/api';
+import { Play, Code2, Settings2, Loader2, LocateFixed, ChevronDown, ArrowRight } from 'lucide-react';
+import { uploadP4, analyzeParser, analyzeTable, analyzeEgressTable, analyzeDeparser, getComponents, syncExecutionConfig } from '../lib/api';
 import type { SourceInfo } from '../lib/api';
+import type { TopologyConfig } from './NetworkConfigModal';
 
 export default function CenterPanel({
   code,
@@ -11,9 +12,12 @@ export default function CenterPanel({
   onVerificationComplete,
   onCompileComplete,
   executionChain,
-  setExecutionChain,
+  stageHistory,
+  currentStageIndex,
+  onSelectStage,
   lastOutputFile,
   onClearChain,
+  networkConfig,
 }: {
   code: string;
   onChangeCode: (newCode: string) => void;
@@ -21,19 +25,25 @@ export default function CenterPanel({
   onVerificationComplete: (type: string, name: string, outputFile: string, result: any) => void;
   onCompileComplete: (fsm: any) => void;
   executionChain: string[];
-  setExecutionChain: React.Dispatch<React.SetStateAction<string[]>>;
+  stageHistory: Array<{ chain: string[] }>;
+  currentStageIndex: number;
+  onSelectStage: (index: number) => void;
   lastOutputFile: string | null;
   onClearChain: () => void;
+  networkConfig: TopologyConfig | null;
 }) {
   const [compiledData, setCompiledData] = useState<any>(null);
   const [isCompiling, setIsCompiling] = useState(false);
   const [compileError, setCompileError] = useState<string | null>(null);
   const [verifyingNode, setVerifyingNode] = useState<string | null>(null);
   const [verifyError, setVerifyError] = useState<string | null>(null);
+  const [isStageMenuOpen, setIsStageMenuOpen] = useState(false);
 
   const editorRef = useRef<any>(null);
   const monacoRef = useRef<any>(null);
   const decorationsRef = useRef<any[]>([]);
+  const stageMenuRef = useRef<HTMLDivElement | null>(null);
+  const stagePathScrollRef = useRef<HTMLDivElement | null>(null);
 
   const handleEditorDidMount = (editor: any, monaco: any) => {
     editorRef.current = editor;
@@ -116,6 +126,45 @@ export default function CenterPanel({
     return null;
   };
 
+  const currentStageChain = stageHistory[currentStageIndex]?.chain ?? [];
+  const getPrefixStageIndex = (depth: number): number => {
+    if (depth <= 0) return 0;
+    const prefix = currentStageChain.slice(0, depth);
+    for (let i = currentStageIndex; i >= 0; i--) {
+      const chain = stageHistory[i]?.chain ?? [];
+      if (chain.length !== depth) continue;
+      let same = true;
+      for (let j = 0; j < depth; j++) {
+        if (chain[j] !== prefix[j]) {
+          same = false;
+          break;
+        }
+      }
+      if (same) return i;
+    }
+    return 0;
+  };
+
+  useEffect(() => {
+    const onDocClick = (evt: MouseEvent) => {
+      const node = stageMenuRef.current;
+      if (!node) return;
+      if (evt.target instanceof Node && !node.contains(evt.target)) {
+        setIsStageMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', onDocClick);
+    return () => document.removeEventListener('mousedown', onDocClick);
+  }, []);
+
+  useEffect(() => {
+    const node = stagePathScrollRef.current;
+    if (!node) return;
+    requestAnimationFrame(() => {
+      node.scrollLeft = node.scrollWidth;
+    });
+  }, [currentStageIndex, currentStageChain.join('->')]);
+
   // ── Compile ─────────────────────────────────────────────────────────────────
   const handleCompile = async () => {
     setIsCompiling(true);
@@ -140,14 +189,6 @@ export default function CenterPanel({
     setVerifyingNode(name);
     setVerifyError(null);
 
-    // Visual chain update
-    const shortName = name.split('.').pop() || name;
-    if (type === 'parser') {
-      setExecutionChain([shortName]);
-    } else {
-      setExecutionChain(prev => [...prev, shortName]);
-    }
-
     try {
       let outputFile: string;
       let result: any;
@@ -166,6 +207,10 @@ export default function CenterPanel({
       } else {
         // table (ingress or egress)
         if (!lastOutputFile) throw new Error('No input state available. Run parser first.');
+        if (!networkConfig) throw new Error('Network configuration is not available yet.');
+
+        await syncExecutionConfig(networkConfig);
+
         const switchId = 's1'; // TODO: read from NetworkConfigModal context
         const pipelineName = getPipelineName(name);
 
@@ -182,8 +227,6 @@ export default function CenterPanel({
       onVerificationComplete(type, name, outputFile, result);
     } catch (err: any) {
       setVerifyError(err.message ?? 'Verification failed');
-      // Roll back the chain item we optimistically added
-      setExecutionChain(prev => prev.slice(0, -1));
     } finally {
       setVerifyingNode(null);
     }
@@ -193,29 +236,48 @@ export default function CenterPanel({
   const StructureItem = ({ type, name, sourceInfo }: { type: string, name: string, sourceInfo?: SourceInfo }) => {
     const isDisabled = type !== 'parser' && executionChain.length === 0;
     const isLoading = verifyingNode === name;
+    const isJumpable = !!sourceInfo;
 
     return (
-      <div style={{
-        background: 'var(--bg-surface)', padding: '0.8rem 1rem', borderRadius: '6px',
-        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-        opacity: isDisabled ? 0.6 : 1
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+      <div
+        onClick={() => {
+          if (sourceInfo) jumpToSource(sourceInfo);
+        }}
+        style={{
+          background: 'var(--bg-surface)', padding: '0.8rem 1rem', borderRadius: '6px',
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+          opacity: isDisabled ? 0.6 : 1,
+          cursor: isJumpable ? 'pointer' : 'default',
+          transition: 'background 0.15s ease',
+        }}
+      >
+        <div
+          style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flex: 1, minWidth: 0 }}
+        >
           <h4 style={{ margin: 0, color: 'var(--text-main)', fontSize: '0.85rem' }}>{name}</h4>
           {sourceInfo && (
-            <button 
-              onClick={() => jumpToSource(sourceInfo)}
+            <span
               title={`Jump to line ${sourceInfo.line}`}
               style={{
-                background: 'rgba(59, 130, 246, 0.1)', cursor: 'pointer', border: '1px solid rgba(59, 130, 246, 0.4)',
-                color: 'var(--accent)', borderRadius: '4px', padding: '0.2rem', display: 'flex', alignItems: 'center'
-              }}>
-               <LocateFixed size={12} />
-            </button>
+                background: 'rgba(59, 130, 246, 0.1)',
+                border: '1px solid rgba(59, 130, 246, 0.4)',
+                color: 'var(--accent)',
+                borderRadius: '4px',
+                padding: '0.2rem',
+                display: 'flex',
+                alignItems: 'center',
+                flexShrink: 0,
+              }}
+            >
+              <LocateFixed size={12} />
+            </span>
           )}
         </div>
         <button
-          onClick={() => handleVerifyNode(type, name)}
+          onClick={(e) => {
+            e.stopPropagation();
+            handleVerifyNode(type, name);
+          }}
           disabled={isDisabled || !!verifyingNode}
           style={{
             background: isDisabled ? 'transparent' : 'var(--border)',
@@ -294,20 +356,124 @@ export default function CenterPanel({
           <Settings2 size={18} /> Compiled Structures
         </div>
 
-        {/* Input State Indicator */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'var(--bg-surface)', padding: '0.2rem 0.6rem', borderRadius: '4px', border: '1px solid var(--border)' }}>
-          <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Loaded State:</span>
-          <span style={{ fontSize: '0.75rem', color: executionChain.length > 0 ? 'var(--accent)' : 'var(--danger)', fontWeight: 600, fontFamily: 'monospace' }}>
-            {executionChain.length > 0 ? executionChain.join(' -> ') : 'None Loaded'}
+        {/* Loaded Stage: two-line layout (title + horizontal scroll path) */}
+        <div ref={stageMenuRef} style={{ position: 'relative', display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: '0.25rem', background: 'var(--bg-surface)', padding: '0.28rem 0.45rem 0.35rem 0.45rem', borderRadius: '6px', border: '1px solid var(--border)', width: '540px', maxWidth: '540px', minWidth: '320px' }}>
+          <span style={{ fontSize: '0.6rem', letterSpacing: '0.05em', textTransform: 'uppercase', color: 'var(--text-muted)', whiteSpace: 'nowrap', alignSelf: 'flex-start' }}>
+            Loaded Stage
           </span>
-          {executionChain.length > 0 && (
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', minWidth: 0 }}>
+            <div ref={stagePathScrollRef} style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', whiteSpace: 'nowrap', overflowX: 'auto', overflowY: 'hidden', paddingBottom: '0.08rem', flex: 1, minWidth: 0 }}>
+              {currentStageChain.length === 0 ? (
+                <div style={{ background: 'var(--bg-dark)', color: 'var(--text-muted)', padding: '0.2rem 0.58rem', borderRadius: '12px', border: '1px solid var(--border)', fontSize: '0.72rem', fontFamily: 'monospace', flexShrink: 0 }}>
+                  None
+                </div>
+              ) : (
+                currentStageChain.map((step, idx) => {
+                  const prefixStageIndex = getPrefixStageIndex(idx + 1);
+                  const isCurrent = idx === currentStageChain.length - 1;
+                  return (
+                    <div key={`${step}-${idx}`} style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexShrink: 0 }}>
+                      <button
+                        onClick={() => onSelectStage(prefixStageIndex)}
+                        disabled={!!verifyingNode}
+                        style={{
+                          background: 'var(--bg-dark)',
+                          color: isCurrent ? 'var(--accent)' : 'var(--text-main)',
+                          border: isCurrent ? '1px solid var(--accent)' : '1px solid var(--border)',
+                          cursor: verifyingNode ? 'not-allowed' : 'pointer',
+                          borderRadius: '12px',
+                          padding: '0.2rem 0.65rem',
+                          fontSize: '0.72rem',
+                          fontFamily: 'monospace',
+                          opacity: verifyingNode ? 0.7 : 1,
+                          flexShrink: 0,
+                        }}
+                        title={`Go to stage: ${currentStageChain.slice(0, idx + 1).join(' -> ')}`}
+                      >
+                        {step}
+                      </button>
+                      {idx < currentStageChain.length - 1 && <ArrowRight size={12} color="var(--text-muted)" />}
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
             <button
-              onClick={onClearChain}
-              style={{ background: 'transparent', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', color: 'var(--danger)', padding: '0 0 0 0.4rem', marginLeft: '0.2rem', borderLeft: '1px solid var(--border)' }}
-              title="Clear Input State"
+              onClick={() => !verifyingNode && setIsStageMenuOpen((v) => !v)}
+              disabled={!!verifyingNode}
+              style={{
+                background: 'transparent',
+                border: 'none',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: 'var(--text-muted)',
+                cursor: verifyingNode ? 'not-allowed' : 'pointer',
+                opacity: verifyingNode ? 0.7 : 1,
+                padding: '0 0.1rem',
+                flexShrink: 0,
+              }}
+              title="Open stage menu"
             >
-              <Trash2 size={12} />
+              <ChevronDown size={14} />
             </button>
+          </div>
+
+          {isStageMenuOpen && (
+            <div style={{ position: 'absolute', right: 0, top: 'calc(100% + 0.35rem)', background: 'var(--bg-panel)', border: '1px solid var(--border)', borderRadius: '6px', minWidth: '320px', maxWidth: '520px', maxHeight: '260px', overflowY: 'auto', zIndex: 30, boxShadow: '0 8px 24px rgba(0,0,0,0.35)' }}>
+              {stageHistory.map((stage, idx) => {
+                const label = idx === 0 ? 'None' : stage.chain.join(' -> ');
+                const selected = idx === currentStageIndex;
+                return (
+                  <button
+                    key={idx}
+                    onClick={() => {
+                      onSelectStage(idx);
+                      setIsStageMenuOpen(false);
+                    }}
+                    style={{
+                      width: '100%',
+                      textAlign: 'left',
+                      background: selected ? 'rgba(56,189,248,0.12)' : 'transparent',
+                      color: selected ? 'var(--accent)' : 'var(--text-main)',
+                      border: 'none',
+                      borderBottom: idx < stageHistory.length - 1 ? '1px solid rgba(255,255,255,0.06)' : 'none',
+                      padding: '0.5rem 0.7rem',
+                      cursor: 'pointer',
+                      fontSize: '0.74rem',
+                      fontFamily: 'monospace',
+                    }}
+                    title={label}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+              {stageHistory.length > 1 && (
+                <button
+                  onClick={() => {
+                    onSelectStage(0);
+                    setIsStageMenuOpen(false);
+                  }}
+                  style={{
+                    width: '100%',
+                    textAlign: 'left',
+                    background: 'rgba(239,68,68,0.08)',
+                    color: '#fca5a5',
+                    border: 'none',
+                    borderTop: '1px solid rgba(239,68,68,0.2)',
+                    padding: '0.5rem 0.7rem',
+                    cursor: 'pointer',
+                    fontSize: '0.74rem',
+                    fontFamily: 'monospace',
+                  }}
+                >
+                  Load None
+                </button>
+              )}
+            </div>
           )}
         </div>
       </div>

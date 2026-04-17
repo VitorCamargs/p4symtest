@@ -1,0 +1,58 @@
+[
+  {
+    "description": "start [extract ethernet] -> parse_ipv4 [extract ipv4] -> parse_tcp [extract tcp] -> tbl_programa177 -> MyIngress.ipv4_lpm -> MyEgress.egress_port_smac",
+    "z3_constraints_smt2": [
+      "(= ethernet.etherType #x0800)",
+      "(= ipv4.protocol #x06)",
+      "(= standard_metadata.$valid$ #b0)",
+      "(= ethernet.$valid$ #b1)",
+      "(= ipv4.$valid$ #b1)",
+      "(= tcp.$valid$ #b1)",
+      "(distinct standard_metadata.egress_spec #b111111111)",
+      "(let ((a!1 (ite (= ipv4.dstAddr #x0a00010a)\n                #b000000001\n                (ite (= ((_ extract 31 8) ipv4.dstAddr) #x0a0002)\n                     #b000000010\n                     #b111111111))))\n  (distinct a!1 #b111111111))"
+    ],
+    "present_headers": [
+      "ethernet",
+      "ipv4",
+      "tcp"
+    ],
+    "history": [
+      "Parser",
+      "tbl_programa177",
+      "MyIngress.ipv4_lpm",
+      "MyEgress.egress_port_smac"
+    ],
+    "field_updates": {
+      "scalars.metadata.is_dropped": "(ite (or (= ipv4.dstAddr #x0a00010a)\n         (= ((_ extract 31 8) ipv4.dstAddr) #x0a0002))\n     #b0\n     #b1)",
+      "scalars.metadata.routing_class": "#x00",
+      "standard_metadata.egress_spec": "(ite (= ipv4.dstAddr #x0a00010a)\n     #b000000001\n     (ite (= ((_ extract 31 8) ipv4.dstAddr) #x0a0002) #b000000010 #b111111111))",
+      "ethernet.dstAddr": "(ite (= ipv4.dstAddr #x0a00010a)\n     #x000000000100\n     (ite (= ((_ extract 31 8) ipv4.dstAddr) #x0a0002)\n          #x00aabbccdd02\n          ethernet.dstAddr))",
+      "ethernet.srcAddr": "(let ((a!1 (ite (or (= ipv4.dstAddr #x0a00010a)\n                    (= ((_ extract 31 8) ipv4.dstAddr) #x0a0002))\n                ethernet.dstAddr\n                ethernet.srcAddr)))\n  (ite (or (= standard_metadata.egress_port #b000000001)\n           (= standard_metadata.egress_port #b000000010))\n       #x00aabbccdd01\n       a!1))",
+      "ipv4.ttl": "(ite (or (= ipv4.dstAddr #x0a00010a)\n         (= ((_ extract 31 8) ipv4.dstAddr) #x0a0002))\n     (bvadd #xff ipv4.ttl)\n     ipv4.ttl)"
+    }
+  },
+  {
+    "description": "start [extract ethernet] -> tbl_programa177 -> MyEgress.egress_port_smac",
+    "z3_constraints_smt2": [
+      "(not (= ethernet.etherType #x0800))",
+      "(= standard_metadata.$valid$ #b0)",
+      "(= ethernet.$valid$ #b1)",
+      "(= ipv4.$valid$ #b0)",
+      "(= tcp.$valid$ #b0)",
+      "(distinct standard_metadata.egress_spec #b111111111)"
+    ],
+    "present_headers": [
+      "ethernet"
+    ],
+    "history": [
+      "Parser",
+      "tbl_programa177",
+      "MyEgress.egress_port_smac"
+    ],
+    "field_updates": {
+      "scalars.metadata.is_dropped": "#b0",
+      "scalars.metadata.routing_class": "#x00",
+      "ethernet.srcAddr": "(ite (or (= standard_metadata.egress_port #b000000001)\n         (= standard_metadata.egress_port #b000000010))\n     #x00aabbccdd01\n     ethernet.srcAddr)"
+    }
+  }
+]

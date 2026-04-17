@@ -1,8 +1,375 @@
-import { useState, useRef, useEffect } from 'react';
-import { Activity, ChevronDown, ChevronRight, ArrowRight, CheckCircle2, XCircle, Eye, EyeOff } from 'lucide-react';
+import { useState, useRef, useEffect, type ReactNode } from 'react';
+import { Activity, ChevronDown, ChevronRight, ArrowRight, CheckCircle2, XCircle, Eye, EyeOff, Info } from 'lucide-react';
+import { createPortal } from 'react-dom';
 import { parseConstraint, prettyField, prettyFieldValue, prettyComplexConstraint } from '../lib/smt2pretty';
 
 // ── PathItem ──────────────────────────────────────────────────────────────────
+
+function normalizeHistoryList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((v) => String(v));
+}
+
+function sameHistory(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
+function asFieldUpdates(value: unknown): Record<string, string> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    out[k] = String(v);
+  }
+  return out;
+}
+
+function findParentStateForStage(pathData: any, parentStates: any[], targetName: string | undefined): any | null {
+  if (!Array.isArray(parentStates) || !parentStates.length) return null;
+
+  const currentDesc = typeof pathData?.description === 'string' ? pathData.description : '';
+  const currentHistory = normalizeHistoryList(pathData?.history);
+
+  const expectedDesc =
+    targetName && currentDesc.endsWith(` -> ${targetName}`)
+      ? currentDesc.slice(0, -(` -> ${targetName}`).length)
+      : currentDesc;
+
+  const expectedHistory =
+    targetName && currentHistory[currentHistory.length - 1] === targetName
+      ? currentHistory.slice(0, -1)
+      : currentHistory;
+
+  const byHistory = parentStates.filter((s) => sameHistory(normalizeHistoryList(s?.history), expectedHistory));
+  if (byHistory.length === 1) return byHistory[0];
+  if (byHistory.length > 1) {
+    const byDesc = byHistory.find((s) => String(s?.description ?? '') === expectedDesc);
+    if (byDesc) return byDesc;
+    return byHistory[0];
+  }
+
+  const byDesc = parentStates.find((s) => String(s?.description ?? '') === expectedDesc);
+  return byDesc ?? null;
+}
+
+function diffFieldUpdates(current: Record<string, string>, baseline: Record<string, string>): Record<string, string> {
+  const delta: Record<string, string> = {};
+  for (const [field, value] of Object.entries(current)) {
+    if (baseline[field] !== value) {
+      delta[field] = value;
+    }
+  }
+  return delta;
+}
+
+function stageDisplayName(stage: string | undefined | null): string {
+  if (!stage) return 'current_stage';
+  const lower = stage.toLowerCase();
+  if (lower === 'parser' || lower === 'deparser') return lower;
+  return stage.split('.').pop() || stage;
+}
+
+function compactText(value: string, max = 92): string {
+  if (value.length <= max) return value;
+  return `${value.slice(0, max - 3)}...`;
+}
+
+function tooltipFieldName(field: string): string {
+  const lower = field.toLowerCase();
+  if (lower.endsWith('standard_metadata.egress_spec')) return 'port';
+  if (lower.endsWith('is_dropped')) return 'is_dropped';
+  if (lower.endsWith('.ttl')) return 'ttl';
+  if (lower.endsWith('.dstaddr')) return 'dst_addr';
+  if (lower.endsWith('.srcaddr')) return 'src_addr';
+  return field.replace(/^hdr\./, '');
+}
+
+function summarizeChangedVariables(
+  updates: Record<string, string>
+): string[] {
+  const lines: string[] = [];
+
+  for (const [field, expr] of Object.entries(updates)) {
+    const values = Array.from(
+      new Set(
+        collectIteBranches(expr)
+          .map((b) => normalizeScalarSymbol(b.result))
+          .filter((v) => v !== field)
+          .map((v) => normalizeResult(v, field))
+          .filter((v) => v && v !== 'none')
+      )
+    );
+    if (!values.length) continue;
+
+    lines.push(`${tooltipFieldName(prettyField(field))}: ${values.join(' | ')}`);
+  }
+
+  return lines;
+}
+
+function humanizeConstraintLine(raw: string): string | null {
+  const smt = raw.trim();
+  if (!smt) return null;
+
+  const validMatch = smt.match(/^\(=\s+([a-zA-Z0-9_.$]+)\.\$valid\$\s+#b([01])\)$/);
+  if (validMatch) {
+    const header = validMatch[1];
+    const state = validMatch[2] === '1' ? 'is valid' : 'is invalid';
+    return `${prettyField(header)} ${state}`;
+  }
+
+  const parsed = parseConstraint(smt);
+  if (!parsed.isComplex && parsed.field && parsed.op && parsed.value !== undefined) {
+    if (parsed.op === '==') return `${parsed.field} is ${parsed.value}`;
+    if (parsed.op === '!=') return `${parsed.field} is not ${parsed.value}`;
+    return `${parsed.field} ${parsed.op} ${parsed.value}`;
+  }
+
+  if (smt.includes('distinct') && (smt.includes('#b111111111') || smt.includes('#x1ff'))) {
+    return 'Packet is not dropped (egress_spec != DROP)';
+  }
+
+  const pretty = prettyComplexConstraint(smt).trim();
+  if (!pretty || pretty === smt) return null;
+  return pretty;
+}
+
+function summarizeConstraintList(
+  constraints: unknown
+): string[] {
+  if (!Array.isArray(constraints)) return [];
+
+  const unique: string[] = [];
+  const seen = new Set<string>();
+  for (const c of constraints) {
+    if (typeof c !== 'string') continue;
+    const pretty = humanizeConstraintLine(c);
+    if (!pretty) continue;
+    if (seen.has(pretty)) continue;
+    seen.add(pretty);
+    unique.push(pretty);
+  }
+
+  return unique;
+}
+
+function getGatingConditionSource(targetName: string | undefined, compiledData?: any): string | null {
+  if (!targetName) return null;
+  const allPipelines: any[] = compiledData?.pipelines || [];
+  for (const pipeline of allPipelines) {
+    const gatingNode = (pipeline.conditionals || []).find(
+      (cond: any) => cond.true_next === targetName
+    );
+    if (gatingNode?.source_info?.source_fragment) {
+      return String(gatingNode.source_info.source_fragment);
+    }
+  }
+  return null;
+}
+
+function InfoHint({ text }: { text: string }) {
+  const [open, setOpen] = useState(false);
+  const triggerRef = useRef<HTMLSpanElement | null>(null);
+  const tooltipRef = useRef<HTMLDivElement | null>(null);
+  const [coords, setCoords] = useState<{ left: number; top: number; placement: 'top' | 'bottom' } | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+
+    const updatePosition = () => {
+      const trigger = triggerRef.current;
+      if (!trigger) return;
+
+      const rect = trigger.getBoundingClientRect();
+      const centerX = rect.left + rect.width / 2;
+      const margin = 12;
+      const gap = 8;
+
+      let left = centerX;
+      let top = rect.bottom + gap;
+      let placement: 'top' | 'bottom' = 'bottom';
+
+      const tip = tooltipRef.current;
+      const tipWidth = tip?.offsetWidth ?? 0;
+      const tipHeight = tip?.offsetHeight ?? 0;
+
+      if (tipWidth > 0) {
+        const minCenter = margin + tipWidth / 2;
+        const maxCenter = window.innerWidth - margin - tipWidth / 2;
+        left = Math.max(minCenter, Math.min(maxCenter, centerX));
+      }
+
+      if (tipHeight > 0 && top + tipHeight + margin > window.innerHeight) {
+        const above = rect.top - gap - tipHeight;
+        if (above >= margin) {
+          top = above;
+          placement = 'top';
+        }
+      }
+
+      setCoords({ left, top, placement });
+    };
+
+    const raf1 = requestAnimationFrame(() => {
+      updatePosition();
+      requestAnimationFrame(updatePosition);
+    });
+
+    window.addEventListener('resize', updatePosition);
+    window.addEventListener('scroll', updatePosition, true);
+    return () => {
+      cancelAnimationFrame(raf1);
+      window.removeEventListener('resize', updatePosition);
+      window.removeEventListener('scroll', updatePosition, true);
+    };
+  }, [open, text]);
+
+  return (
+    <span
+      ref={triggerRef}
+      onMouseEnter={() => setOpen(true)}
+      onMouseLeave={() => setOpen(false)}
+      onFocus={() => setOpen(true)}
+      onBlur={() => setOpen(false)}
+      tabIndex={0}
+      style={{ display: 'inline-flex', alignItems: 'center', color: 'var(--text-muted)', cursor: 'help', position: 'relative', outline: 'none' }}
+      aria-label={text}
+    >
+      <Info size={12} />
+      {open && typeof document !== 'undefined' && createPortal(
+        <div
+          ref={tooltipRef}
+          style={{
+            position: 'fixed',
+            left: coords?.left ?? 0,
+            top: coords?.top ?? 0,
+            transform: 'translateX(-50%)',
+            zIndex: 9999,
+            width: 'min(360px, calc(100vw - 24px))',
+            padding: '0.45rem 0.55rem',
+            borderRadius: '6px',
+            border: '1px solid var(--border)',
+            background: 'rgba(12, 17, 27, 0.98)',
+            color: '#cbd5e1',
+            fontSize: '0.68rem',
+            lineHeight: 1.4,
+            boxShadow: '0 8px 24px rgba(0,0,0,0.35)',
+            pointerEvents: 'none',
+            whiteSpace: 'pre-line',
+          }}
+        >
+          {text}
+        </div>,
+        document.body
+      )}
+    </span>
+  );
+}
+
+function HoverTextHint({
+  text,
+  children,
+}: {
+  text: string;
+  children: ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  const triggerRef = useRef<HTMLSpanElement | null>(null);
+  const tooltipRef = useRef<HTMLDivElement | null>(null);
+  const [coords, setCoords] = useState<{ left: number; top: number } | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+
+    const updatePosition = () => {
+      const trigger = triggerRef.current;
+      if (!trigger) return;
+
+      const rect = trigger.getBoundingClientRect();
+      const centerX = rect.left + rect.width / 2;
+      const margin = 12;
+      const gap = 8;
+
+      let left = centerX;
+      let top = rect.bottom + gap;
+      const tip = tooltipRef.current;
+      const tipWidth = tip?.offsetWidth ?? 0;
+      const tipHeight = tip?.offsetHeight ?? 0;
+
+      if (tipWidth > 0) {
+        const minCenter = margin + tipWidth / 2;
+        const maxCenter = window.innerWidth - margin - tipWidth / 2;
+        left = Math.max(minCenter, Math.min(maxCenter, centerX));
+      }
+
+      if (tipHeight > 0 && top + tipHeight + margin > window.innerHeight) {
+        const above = rect.top - gap - tipHeight;
+        if (above >= margin) {
+          top = above;
+        }
+      }
+
+      setCoords({ left, top });
+    };
+
+    const raf1 = requestAnimationFrame(() => {
+      updatePosition();
+      requestAnimationFrame(updatePosition);
+    });
+
+    window.addEventListener('resize', updatePosition);
+    window.addEventListener('scroll', updatePosition, true);
+    return () => {
+      cancelAnimationFrame(raf1);
+      window.removeEventListener('resize', updatePosition);
+      window.removeEventListener('scroll', updatePosition, true);
+    };
+  }, [open, text]);
+
+  return (
+    <span
+      ref={triggerRef}
+      onMouseEnter={() => setOpen(true)}
+      onMouseLeave={() => setOpen(false)}
+      onFocus={() => setOpen(true)}
+      onBlur={() => setOpen(false)}
+      tabIndex={0}
+      style={{ display: 'inline-block', width: '100%', cursor: 'help', outline: 'none' }}
+      aria-label={text}
+    >
+      {children}
+      {open && typeof document !== 'undefined' && createPortal(
+        <div
+          ref={tooltipRef}
+          style={{
+            position: 'fixed',
+            left: coords?.left ?? 0,
+            top: coords?.top ?? 0,
+            transform: 'translateX(-50%)',
+            zIndex: 9999,
+            width: 'min(620px, calc(100vw - 24px))',
+            padding: '0.55rem 0.65rem',
+            borderRadius: '6px',
+            border: '1px solid var(--border)',
+            background: 'rgba(12, 17, 27, 0.98)',
+            color: '#cbd5e1',
+            fontSize: '0.7rem',
+            lineHeight: 1.45,
+            boxShadow: '0 8px 24px rgba(0,0,0,0.35)',
+            pointerEvents: 'none',
+            whiteSpace: 'pre-line',
+          }}
+        >
+          {text}
+        </div>,
+        document.body
+      )}
+    </span>
+  );
+}
 
 const PathItem = ({
   pathData,
@@ -10,12 +377,14 @@ const PathItem = ({
   displayName,
   activeVerification,
   compiledData,
+  parentStates,
 }: {
   pathData: any;
   index: number;
   displayName?: string;
   activeVerification: { type: string; name: string } | null;
   compiledData?: any;
+  parentStates?: any[];
 }) => {
   const [expanded, setExpanded] = useState(false);
 
@@ -31,6 +400,11 @@ const PathItem = ({
 
   const targetType = activeVerification?.type;
   const targetName = activeVerification?.name;
+
+  const reachedSelectedStage =
+    targetType === 'parser' ||
+    targetType === 'deparser' ||
+    (!!targetName && Array.isArray(pathData.history) && pathData.history.includes(targetName));
 
   if (targetType === 'parser' || targetType === 'deparser') {
     if (
@@ -52,6 +426,49 @@ const PathItem = ({
       statusColor = 'var(--text-muted)';
     }
   }
+
+  const currentUpdates = asFieldUpdates(pathData.field_updates);
+  const parentState = findParentStateForStage(pathData, parentStates ?? [], targetName);
+  const parentUpdates = asFieldUpdates(parentState?.field_updates);
+  const stageLabel = targetName ?? activeVerification?.type ?? 'current stage';
+  const gatingCondition = getGatingConditionSource(targetName, compiledData);
+
+  const stageUpdates =
+    reachedSelectedStage
+      ? (parentState ? diffFieldUpdates(currentUpdates, parentUpdates) : currentUpdates)
+      : {};
+  const hasStageUpdates = Object.keys(stageUpdates).length > 0;
+  const shouldRenderStageBlock = hasStageUpdates || reachedSelectedStage || Object.keys(currentUpdates).length > 0;
+  const inheritedConditionSummary = summarizeConstraintList(
+    parentState?.z3_constraints_smt2 ?? pathData.z3_constraints_smt2
+  );
+  const parentStageName = stageDisplayName(parentState?.history?.[parentState.history.length - 1]);
+  const parentChangedVariables = summarizeChangedVariables(parentUpdates);
+  const currentChangedVariables = summarizeChangedVariables(stageUpdates);
+  const stackedReachBaseConditions = (() => {
+    const lines: string[] = [];
+    if (gatingCondition) lines.push(`To reach this stage: ${gatingCondition}`);
+    inheritedConditionSummary.forEach((line) => {
+      if (!lines.includes(line)) lines.push(line);
+    });
+    return lines;
+  })();
+
+  const stageInfoTooltip = (() => {
+    const lines: string[] = [];
+    if (parentState && parentChangedVariables.length) {
+      lines.push(`${parentStageName}:`);
+      parentChangedVariables.forEach((line) => lines.push(line));
+    }
+    if (currentChangedVariables.length) {
+      lines.push(`${stageDisplayName(stageLabel)}:`);
+      currentChangedVariables.forEach((line) => lines.push(line));
+    }
+    if (!lines.length) {
+      lines.push('No variables changed in this execution stage.');
+    }
+    return lines.join('\n');
+  })();
 
   return (
     <div style={{ background: 'var(--bg-panel)', padding: '0.8rem', borderRadius: '6px', border: '1px solid var(--border)' }}>
@@ -140,8 +557,25 @@ const PathItem = ({
             </div>
           )}
 
-          {pathData.field_updates && Object.keys(pathData.field_updates).length > 0 && (
-            <FieldUpdatesView updates={pathData.field_updates} />
+          {shouldRenderStageBlock && (
+            hasStageUpdates ? (
+              <FieldUpdatesView
+                updates={stageUpdates}
+                stageLabel={stageLabel}
+                infoTooltip={stageInfoTooltip}
+                baseReachConditions={stackedReachBaseConditions}
+              />
+            ) : (
+                <div style={{ marginBottom: '1rem', padding: '0.7rem 0.8rem', border: '1px solid var(--border)', borderRadius: '6px', background: 'rgba(255,255,255,0.02)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.25rem' }}>
+                  <strong style={{ color: 'var(--accent)', fontSize: '0.8rem' }}>Field Updates (Current Stage)</strong>
+                  <InfoHint text={stageInfoTooltip} />
+                </div>
+                <span style={{ color: 'var(--text-muted)', fontSize: '0.74rem' }}>
+                  No field updates generated at this stage for this path.
+                </span>
+              </div>
+            )
           )}
 
           {pathData.z3_constraints_smt2 && (
@@ -177,51 +611,599 @@ function splitSmtTokens(s: string): string[] {
   return tokens;
 }
 
-function evalSExpr(expr: string, bindings: Record<string, string>): string {
-  expr = expr.trim();
-  while(true) {
-    const letM = expr.match(/^\(let\s+\(\(.*?\)\)\n?\s*([\s\S]+)\)$/s) || expr.match(/^\(let\s+\(.*?\)\s+([\s\S]+)\)$/s);
-    if (letM) expr = letM[letM.length - 1].trim();
-    else break;
+function parseBitVecLiteral(lit: string): { value: bigint; width: number } | null {
+  if (typeof lit !== 'string') return null;
+  if (lit.startsWith('#x')) {
+    const hex = lit.slice(2);
+    if (!hex) return null;
+    try {
+      return { value: BigInt(`0x${hex}`), width: hex.length * 4 };
+    } catch {
+      return null;
+    }
   }
-  
-  if (!expr.startsWith('(')) return expr;
+  if (lit.startsWith('#b')) {
+    const bin = lit.slice(2);
+    if (!bin || /[^01]/.test(bin)) return null;
+    try {
+      return { value: BigInt(`0b${bin}`), width: bin.length };
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
 
-  const inner = expr.substring(1, expr.length - 1).trim();
-  const tokens = splitSmtTokens(inner);
-  
-  if (tokens.length === 0) return expr;
-  
-  if (tokens[0] === 'ite') {
-    const cond = evalSExpr(tokens[1], bindings);
-    if (cond === 'true') return evalSExpr(tokens[2], bindings);
-    if (cond === 'false') return evalSExpr(tokens.slice(3).join(' '), bindings);
-    return expr; // Unresolved condition
+function ipv4FromBitVecLiteral(lit: string): string | null {
+  const parsed = parseBitVecLiteral(lit);
+  if (!parsed || parsed.width !== 32) return null;
+  const value = parsed.value & 0xffff_ffffn;
+  const a = Number((value >> 24n) & 0xffn);
+  const b = Number((value >> 16n) & 0xffn);
+  const c = Number((value >> 8n) & 0xffn);
+  const d = Number(value & 0xffn);
+  return `${a}.${b}.${c}.${d}`;
+}
+
+function toBitVecLiteral(value: bigint, width: number): string {
+  if (width <= 0) return '#x0';
+  if (width % 4 === 0) {
+    const digits = Math.ceil(width / 4);
+    return `#x${value.toString(16).padStart(digits, '0')}`;
   }
-  
-  if (tokens[0] === '=') {
-    const a = evalSExpr(tokens[1], bindings);
-    const b = evalSExpr(tokens[2], bindings);
-    if (bindings[a]) return bindings[a] === b ? 'true' : 'false';
-    if (bindings[b]) return bindings[b] === a ? 'true' : 'false';
+  return `#b${value.toString(2).padStart(width, '0')}`;
+}
+
+function liftExtractLiteralToField(hi: number, lo: number, extractedLiteral: string): string | null {
+  if (!Number.isFinite(hi) || !Number.isFinite(lo) || hi < lo || lo < 0) return null;
+  const parsed = parseBitVecLiteral(extractedLiteral);
+  if (!parsed) return null;
+
+  const extractWidth = hi - lo + 1;
+  const fullWidth = hi + 1;
+  if (extractWidth <= 0 || fullWidth <= 0) return null;
+
+  const extractMask = (1n << BigInt(extractWidth)) - 1n;
+  const normalized = parsed.value & extractMask;
+  const lifted = normalized << BigInt(lo);
+  return toBitVecLiteral(lifted, fullWidth);
+}
+
+function parseIpv4PrefixExtract(
+  hi: number,
+  lo: number,
+  field: string,
+  rhsLiteral: string,
+): { ip: string; prefix: number } | null {
+  const f = field.toLowerCase();
+  const isIpv4Field =
+    f.includes('ipv4.') && (f.includes('dstaddr') || f.includes('srcaddr') || f.includes('ipaddr'));
+  if (!isIpv4Field) return null;
+  if (!Number.isFinite(hi) || !Number.isFinite(lo) || hi !== 31 || lo < 0 || lo > 31 || hi < lo) return null;
+
+  const prefix = 32 - lo;
+  if (prefix <= 0 || prefix > 32) return null;
+
+  const lifted = liftExtractLiteralToField(hi, lo, rhsLiteral);
+  if (!lifted) return null;
+  const ip = ipv4FromBitVecLiteral(lifted);
+  if (!ip) return null;
+  return { ip, prefix };
+}
+
+function escapeRegex(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function replaceSExprSymbol(input: string, symbol: string, replacement: string): string {
+  const escaped = escapeRegex(symbol);
+  const re = new RegExp(`(^|[\\s()])${escaped}(?=($|[\\s()]))`, 'g');
+  return input.replace(re, `$1${replacement}`);
+}
+
+function canonicalizeSExpr(expr: string): string {
+  const trimmed = expr.trim();
+  if (!trimmed) return '';
+  if (!(trimmed.startsWith('(') && trimmed.endsWith(')'))) {
+    return trimmed.replace(/\s+/g, ' ');
+  }
+  const inner = trimmed.slice(1, -1).trim();
+  const tokens = splitSmtTokens(inner);
+  if (!tokens.length) return '()';
+  return `(${tokens.map((t) => canonicalizeSExpr(t)).join(' ')})`;
+}
+
+function inlineLetBindings(expr: string): string {
+  let current = expr.trim();
+  let guard = 0;
+
+  while (guard < 24 && current.startsWith('(let ') && current.endsWith(')')) {
+    const inner = current.slice(1, -1).trim();
+    const tokens = splitSmtTokens(inner);
+    if (tokens.length < 3 || tokens[0] !== 'let') break;
+
+    const bindingsExpr = tokens[1];
+    let body = tokens.slice(2).join(' ').trim();
+    if (!(bindingsExpr.startsWith('(') && bindingsExpr.endsWith(')'))) break;
+
+    const bindingItems = splitSmtTokens(bindingsExpr.slice(1, -1).trim());
+    const bindings: Array<{ name: string; value: string }> = [];
+    for (const item of bindingItems) {
+      if (!(item.startsWith('(') && item.endsWith(')'))) continue;
+      const pair = splitSmtTokens(item.slice(1, -1).trim());
+      if (pair.length < 2) continue;
+      bindings.push({ name: pair[0], value: pair.slice(1).join(' ') });
+    }
+
+    for (const { name, value } of bindings) {
+      const resolved = inlineLetBindings(value);
+      body = replaceSExprSymbol(body, name, resolved);
+    }
+
+    current = body;
+    guard++;
+  }
+
+  return current;
+}
+
+function conditionToAtoms(condition: string): Set<string> {
+  const atoms = new Set<string>();
+
+  const walk = (expr: string) => {
+    const normalized = canonicalizeSExpr(expr);
+    if (!normalized || normalized === 'Always') return;
+    if (!(normalized.startsWith('(') && normalized.endsWith(')'))) {
+      atoms.add(normalized);
+      return;
+    }
+
+    const tokens = splitSmtTokens(normalized.slice(1, -1).trim());
+    if (!tokens.length) return;
+    if (tokens[0] === 'and' && tokens.length > 1) {
+      tokens.slice(1).forEach((t) => walk(t));
+      return;
+    }
+    atoms.add(normalized);
+  };
+
+  walk(condition);
+  return atoms;
+}
+
+function joinConditions(pathConditions: string[]): string {
+  const normalized = pathConditions.map((c) => canonicalizeSExpr(c)).filter(Boolean);
+  if (!normalized.length) return 'Always';
+  if (normalized.length === 1) return normalized[0];
+  return `(and ${normalized.join(' ')})`;
+}
+
+function isSubset(subset: Set<string>, superset: Set<string>): boolean {
+  for (const atom of subset) {
+    if (!superset.has(atom)) return false;
+  }
+  return true;
+}
+
+type TriBool = 'true' | 'false' | 'unknown';
+
+function buildTruthMapFromCondition(condition: string): Map<string, boolean> {
+  const truth = new Map<string, boolean>();
+  const atoms = conditionToAtoms(condition);
+
+  for (const atom of atoms) {
+    const normalized = canonicalizeSExpr(atom);
+    if (!normalized) continue;
+    if (normalized.startsWith('(not ') && normalized.endsWith(')')) {
+      const tokens = splitSmtTokens(normalized.slice(1, -1).trim());
+      if (tokens[0] === 'not' && tokens.length >= 2) {
+        const inner = canonicalizeSExpr(tokens[1]);
+        if (inner) truth.set(inner, false);
+      }
+      truth.set(normalized, true);
+      continue;
+    }
+
+    truth.set(normalized, true);
+    const neg = canonicalizeSExpr(`(not ${normalized})`);
+    if (neg) truth.set(neg, false);
+  }
+
+  return truth;
+}
+
+function evalConditionWithTruth(condition: string, truth: Map<string, boolean>): TriBool {
+  const normalized = canonicalizeSExpr(condition);
+  if (!normalized || normalized === 'Always') return 'true';
+
+  const direct = truth.get(normalized);
+  if (direct === true) return 'true';
+  if (direct === false) return 'false';
+
+  if (!(normalized.startsWith('(') && normalized.endsWith(')'))) return 'unknown';
+  const tokens = splitSmtTokens(normalized.slice(1, -1).trim());
+  if (!tokens.length) return 'unknown';
+
+  const op = tokens[0];
+  if (op === 'not' && tokens.length >= 2) {
+    const inner = evalConditionWithTruth(tokens[1], truth);
+    if (inner === 'true') return 'false';
+    if (inner === 'false') return 'true';
     return 'unknown';
   }
-  
-  if (tokens[0] === 'or') {
+
+  if (op === 'and' && tokens.length >= 2) {
     let hasUnknown = false;
-    for(let i = 1; i < tokens.length; i++) {
-      const res = evalSExpr(tokens[i], bindings);
-      if (res === 'true') return 'true';
-      if (res !== 'false') hasUnknown = true;
+    for (let i = 1; i < tokens.length; i++) {
+      const r = evalConditionWithTruth(tokens[i], truth);
+      if (r === 'false') return 'false';
+      if (r === 'unknown') hasUnknown = true;
+    }
+    return hasUnknown ? 'unknown' : 'true';
+  }
+
+  if (op === 'or' && tokens.length >= 2) {
+    let hasUnknown = false;
+    for (let i = 1; i < tokens.length; i++) {
+      const r = evalConditionWithTruth(tokens[i], truth);
+      if (r === 'true') return 'true';
+      if (r === 'unknown') hasUnknown = true;
     }
     return hasUnknown ? 'unknown' : 'false';
   }
-  
-  return expr;
+
+  return 'unknown';
+}
+
+type EqBitConstraint = {
+  field: string;
+  bits: Map<number, 0 | 1>;
+};
+
+function bitsFromLiteral(value: bigint, width: number, offset = 0): Map<number, 0 | 1> {
+  const bits = new Map<number, 0 | 1>();
+  if (width <= 0) return bits;
+  const mask = (1n << BigInt(width)) - 1n;
+  const normalized = value & mask;
+  for (let i = 0; i < width; i++) {
+    const bit = Number((normalized >> BigInt(i)) & 1n) as 0 | 1;
+    bits.set(offset + i, bit);
+  }
+  return bits;
+}
+
+function parseEqBitConstraint(expr: string): EqBitConstraint | null {
+  const normalized = canonicalizeSExpr(expr);
+  if (!(normalized.startsWith('(') && normalized.endsWith(')'))) return null;
+  const tokens = splitSmtTokens(normalized.slice(1, -1).trim());
+  if (tokens[0] !== '=' || tokens.length < 3) return null;
+
+  const lhs = tokens[1];
+  const rhs = tokens[2];
+  const parsed = parseBitVecLiteral(rhs);
+  if (!parsed) return null;
+
+  if (/^[a-zA-Z0-9_.$]+$/.test(lhs)) {
+    return {
+      field: lhs,
+      bits: bitsFromLiteral(parsed.value, parsed.width, 0),
+    };
+  }
+
+  const extractMatch = lhs.match(/^\(\(_ extract (\d+) (\d+)\)\s+([a-zA-Z0-9_.$]+)\)$/);
+  if (!extractMatch) return null;
+
+  const hi = Number(extractMatch[1]);
+  const lo = Number(extractMatch[2]);
+  const field = extractMatch[3];
+  if (!Number.isFinite(hi) || !Number.isFinite(lo) || hi < lo || lo < 0) return null;
+
+  const width = hi - lo + 1;
+  return {
+    field,
+    bits: bitsFromLiteral(parsed.value, width, lo),
+  };
+}
+
+function constraintsConflict(a: EqBitConstraint, b: EqBitConstraint): boolean {
+  if (a.field !== b.field) return false;
+  for (const [pos, abit] of a.bits.entries()) {
+    const bbit = b.bits.get(pos);
+    if (bbit !== undefined && bbit !== abit) return true;
+  }
+  return false;
+}
+
+function exprDefinitelyFalseByPositiveConflicts(
+  expr: string,
+  positiveConstraints: EqBitConstraint[]
+): boolean {
+  const normalized = canonicalizeSExpr(expr);
+  if (!normalized || normalized === 'Always') return false;
+
+  const eqConstraint = parseEqBitConstraint(normalized);
+  if (eqConstraint) {
+    return positiveConstraints.some((pos) => constraintsConflict(pos, eqConstraint));
+  }
+
+  if (!(normalized.startsWith('(') && normalized.endsWith(')'))) return false;
+  const tokens = splitSmtTokens(normalized.slice(1, -1).trim());
+  if (!tokens.length) return false;
+
+  if (tokens[0] === 'and' && tokens.length > 1) {
+    return tokens.slice(1).some((t) =>
+      exprDefinitelyFalseByPositiveConflicts(t, positiveConstraints)
+    );
+  }
+
+  if (tokens[0] === 'or' && tokens.length > 1) {
+    return tokens.slice(1).every((t) =>
+      exprDefinitelyFalseByPositiveConflicts(t, positiveConstraints)
+    );
+  }
+
+  return false;
+}
+
+function simplifyDisplayCondition(condition: string): string {
+  const normalized = canonicalizeSExpr(condition);
+  if (!normalized || normalized === 'Always') return 'Always';
+  if (!(normalized.startsWith('(') && normalized.endsWith(')'))) return normalized;
+
+  const tokens = splitSmtTokens(normalized.slice(1, -1).trim());
+  if (tokens[0] !== 'and' || tokens.length <= 2) return normalized;
+
+  const conjuncts = tokens.slice(1).map((c) => canonicalizeSExpr(c));
+  const positiveConstraints = conjuncts
+    .filter((c) => !c.startsWith('(not '))
+    .map((c) => parseEqBitConstraint(c))
+    .filter((c): c is EqBitConstraint => c !== null);
+
+  const kept: string[] = [];
+  for (const conj of conjuncts) {
+    if (conj.startsWith('(not ') && conj.endsWith(')')) {
+      const innerTokens = splitSmtTokens(conj.slice(1, -1).trim());
+      if (innerTokens[0] === 'not' && innerTokens.length >= 2) {
+        const inner = canonicalizeSExpr(innerTokens[1]);
+        const negConstraint = parseEqBitConstraint(inner);
+        if (negConstraint) {
+          const redundant = positiveConstraints.some((pos) => constraintsConflict(pos, negConstraint));
+          if (redundant) continue;
+        }
+
+        // Handle composite negations like:
+        // (not (and A B)) and A and C, where C conflicts with B.
+        // In this case the negated conjunct is always true and can be removed.
+        if (exprDefinitelyFalseByPositiveConflicts(inner, positiveConstraints)) {
+          continue;
+        }
+      }
+    }
+    kept.push(conj);
+  }
+
+  if (!kept.length) return 'Always';
+  if (kept.length === 1) return kept[0];
+  return `(and ${kept.join(' ')})`;
+}
+
+function prettyBranchConditionLabel(
+  simplifiedCondition: string,
+  rowIndex: number,
+  totalRows: number
+): string {
+  const canonical = canonicalizeSExpr(simplifiedCondition);
+  const lastRow = rowIndex === totalRows - 1;
+
+  if (!canonical || canonical === 'Always') {
+    return totalRows > 1 && lastRow ? 'else' : 'Always';
+  }
+
+  if (!(canonical.startsWith('(') && canonical.endsWith(')'))) {
+    return prettyCondition(canonical);
+  }
+
+  const tokens = splitSmtTokens(canonical.slice(1, -1).trim());
+  if (!tokens.length) return prettyCondition(canonical);
+
+  if (tokens[0] === 'not' && tokens.length >= 2) {
+    if (lastRow) return 'else';
+    return `else if ${prettyCondition(tokens[1])}`;
+  }
+
+  if (tokens[0] === 'and' && tokens.length > 1) {
+    const atoms = tokens.slice(1).map((t) => canonicalizeSExpr(t)).filter(Boolean);
+    const positives = atoms.filter((a) => !a.startsWith('(not '));
+    const negatives = atoms.filter((a) => a.startsWith('(not '));
+
+    if (lastRow && positives.length === 0 && negatives.length > 0) {
+      return 'else';
+    }
+
+    if (positives.length >= 1 && negatives.length >= 1) {
+      const body =
+        positives.length === 1
+          ? prettyCondition(positives[0])
+          : positives.map((p) => prettyCondition(p)).join(' AND ');
+      return `else if ${body}`;
+    }
+  }
+
+  return prettyCondition(canonical);
+}
+
+function branchScore(branches: FieldBranch[]): number {
+  if (!branches.length) return Number.NEGATIVE_INFINITY;
+  const unique = new Map<string, FieldBranch>();
+  branches.forEach((b) => {
+    if (!unique.has(b.conditionKey)) unique.set(b.conditionKey, b);
+  });
+  const normalized = Array.from(unique.values());
+  const meaningful = normalized.filter((b) => b.conditionKey !== 'Always');
+  if (!meaningful.length && normalized.length <= 1) return Number.NEGATIVE_INFINITY;
+
+  const totalAtomCount = normalized.reduce((acc, b) => acc + b.atomCount, 0);
+  const orPenalty = normalized.reduce((acc, b) => {
+    if (b.conditionKey.includes('(or ')) return acc + 30;
+    if (b.conditionKey.includes('(not (or ')) return acc + 20;
+    return acc;
+  }, 0);
+
+  return normalized.length * 100 + totalAtomCount - orPenalty;
+}
+
+function normalizeScalarSymbol(expr: string): string {
+  let trimmed = expr.trim();
+  let guard = 0;
+  while (guard < 8 && trimmed.startsWith('(') && trimmed.endsWith(')')) {
+    const inner = trimmed.slice(1, -1).trim();
+    if (!inner || /[\s()]/.test(inner)) break;
+    trimmed = inner;
+    guard++;
+  }
+  return trimmed;
+}
+
+type FieldBranch = {
+  condition: string;
+  conditionKey: string;
+  atoms: Set<string>;
+  atomCount: number;
+  result: string;
+};
+
+function collectIteBranches(expr: string): FieldBranch[] {
+  const branches: Array<{ condition: string; result: string }> = [];
+  const expanded = inlineLetBindings(expr);
+
+  const walk = (node: string, pathConditions: string[]) => {
+    const trimmed = node.trim();
+    if (trimmed.startsWith('(') && trimmed.endsWith(')')) {
+      const tokens = splitSmtTokens(trimmed.slice(1, -1).trim());
+      if (tokens[0] === 'ite' && tokens.length >= 4) {
+        const cond = tokens[1];
+        const thenExpr = tokens[2];
+        const elseExpr = tokens.slice(3).join(' ');
+        walk(thenExpr, [...pathConditions, cond]);
+        walk(elseExpr, [...pathConditions, `(not ${cond})`]);
+        return;
+      }
+    }
+
+    branches.push({
+      condition: joinConditions(pathConditions),
+      result: trimmed,
+    });
+  };
+
+  walk(expanded, []);
+
+  return branches.map((branch) => {
+    const conditionKey = canonicalizeSExpr(branch.condition);
+    const atoms = conditionToAtoms(conditionKey);
+    return {
+      ...branch,
+      conditionKey,
+      atoms,
+      atomCount: atoms.size,
+    };
+  });
+}
+
+function prettyCondition(condition: string): string {
+  const normalized = canonicalizeSExpr(condition);
+  if (!normalized || normalized === 'Always') return 'Always';
+  if (!(normalized.startsWith('(') && normalized.endsWith(')')) ) return normalized;
+
+  const tokens = splitSmtTokens(normalized.slice(1, -1).trim());
+  if (!tokens.length) return normalized;
+
+  const op = tokens[0];
+  if ((op === 'and' || op === 'or') && tokens.length > 1) {
+    const sep = op === 'and' ? ' AND ' : ' OR ';
+    return tokens.slice(1).map((t) => prettyCondition(t)).join(sep);
+  }
+
+  if (op === 'not' && tokens.length >= 2) {
+    return `NOT (${prettyCondition(tokens[1])})`;
+  }
+
+  if (op === '=' && tokens.length >= 3) {
+    const lhs = tokens[1];
+    const rhs = tokens[2];
+
+    const extractMatch = lhs.match(/^\(\(_ extract (\d+) (\d+)\)\s+([a-zA-Z0-9_.$]+)\)$/);
+    if (extractMatch) {
+      const hi = Number(extractMatch[1]);
+      const lo = Number(extractMatch[2]);
+      const field = extractMatch[3];
+      const maybePrefix = parseIpv4PrefixExtract(hi, lo, field, rhs);
+      if (maybePrefix) {
+        if (maybePrefix.prefix === 32) {
+          return `${prettyField(field)} == ${maybePrefix.ip}`;
+        }
+        return `${prettyField(field)} in ${maybePrefix.ip}/${maybePrefix.prefix}`;
+      }
+
+      if (hi === lo) {
+        const bit = parseBitVecLiteral(rhs);
+        const bitValue = bit && bit.width === 1 ? (bit.value === 0n ? '0' : '1') : rhs;
+        return `${prettyField(field)}[${hi}] == ${bitValue}`;
+      }
+
+      const lifted = liftExtractLiteralToField(hi, lo, rhs);
+      if (lifted) {
+        return `${prettyField(field)}[${hi}:${lo}] == ${prettyFieldValue(lifted, field)}`;
+      }
+
+      return `${prettyField(field)}[${hi}:${lo}] == ${rhs}`;
+    }
+
+    if (/^[a-zA-Z0-9_.$]+$/.test(lhs)) {
+      return `${prettyField(lhs)} == ${prettyFieldValue(rhs, lhs)}`;
+    }
+  }
+
+  return normalized;
+}
+
+function prettyExtractIte(res: string, targetField: string): string | null {
+  const m = res.match(/^\(ite\s+\(=\s+\(\(_ extract (\d+) (\d+)\)\s+([a-zA-Z0-9_.$]+)\)\s+(#[xb][0-9a-fA-F]+)\)\s+(#[xb][0-9a-fA-F]+)\s+(#[xb][0-9a-fA-F]+)\)$/);
+  if (!m) return null;
+
+  const hi = Number(m[1]);
+  const lo = Number(m[2]);
+  const sourceField = m[3];
+  const condValue = m[4];
+  const thenValue = m[5];
+  const elseValue = m[6];
+  const maybePrefix = parseIpv4PrefixExtract(hi, lo, sourceField, condValue);
+  if (maybePrefix) {
+    const condExpr = maybePrefix.prefix === 32
+      ? `${prettyField(sourceField)} == ${maybePrefix.ip}`
+      : `${prettyField(sourceField)} in ${maybePrefix.ip}/${maybePrefix.prefix}`;
+    return `if ${condExpr} then ${prettyFieldValue(thenValue, targetField)} else ${prettyFieldValue(elseValue, targetField)}`;
+  }
+
+  const liftedCond = liftExtractLiteralToField(hi, lo, condValue);
+  const condPretty = liftedCond ? prettyFieldValue(liftedCond, sourceField) : prettyFieldValue(condValue, sourceField);
+  return `if ${prettyField(sourceField)}[${hi}:${lo}] == ${condPretty} then ${prettyFieldValue(thenValue, targetField)} else ${prettyFieldValue(elseValue, targetField)}`;
 }
 
 function normalizeResult(res: string, targetField: string): string {
-  let r = res.startsWith('#') ? prettyFieldValue(res, targetField) : res;
+  const itePretty = prettyExtractIte(res, targetField);
+  if (itePretty) return itePretty;
+
+  const trimmed = res.trim();
+  const isAtomicToken =
+    trimmed.length > 0 &&
+    !trimmed.includes('(') &&
+    !trimmed.includes(')') &&
+    !/\s/.test(trimmed);
+
+  let r = (trimmed.startsWith('#') || isAtomicToken)
+    ? prettyFieldValue(trimmed, targetField)
+    : trimmed;
   if (r.includes('(bvadd #xff ')) {
     const m = r.match(/\(bvadd #xff\s+([a-zA-Z0-9_.$]+)\)/);
     if (m) r = `${prettyField(m[1])} - 1`;
@@ -229,66 +1211,134 @@ function normalizeResult(res: string, targetField: string): string {
   return r;
 }
 
-function FieldUpdatesView({ updates }: { updates: Record<string, string> }) {
-  const [showRaw, setShowRaw] = useState(false);
+export type FieldUpdateRow = {
+  label: string;
+  isElse?: boolean;
+  stackedReachLines: string[];
+  stackedReachCompact: string;
+  cells: string[];
+};
 
-  // 1. Analyze condition variables
-  const subjectValues = new Map<string, Set<string>>();
-  const regex = /\(=\s+([a-zA-Z0-9_.$]+)\s+(#[xb][0-9a-fA-F]+)\)/g;
-  
-  Object.values(updates).forEach(expr => {
-    let m;
-    while ((m = regex.exec(expr)) !== null) {
-      if (!subjectValues.has(m[1])) subjectValues.set(m[1], new Set());
-      subjectValues.get(m[1])!.add(m[2]);
-    }
-  });
-
-  let primarySubject = 'Condition';
-  let maxVals = 0;
-  subjectValues.forEach((vals, subj) => {
-    if (vals.size > maxVals) { maxVals = vals.size; primarySubject = subj; }
-  });
-
-  const columns = Object.keys(updates).map(k => prettyField(k));
+export function buildFieldUpdateRows(
+  updates: Record<string, string>,
+  baseReachConditions: string[] = []
+): FieldUpdateRow[] {
   const rawFields = Object.keys(updates);
-  
-  const rows: { label: string, isElse?: boolean, cells: string[] }[] = [];
+  if (!rawFields.length) return [];
 
-  if (!showRaw) {
-    if (maxVals > 0) {
-      // Generate row for each matched value
-      const values = Array.from(subjectValues.get(primarySubject) || []);
-      values.forEach(val => {
-        const bindings = { [primarySubject]: val };
-        const cells = rawFields.map((rf) => {
-           const r = evalSExpr(updates[rf], bindings);
-           return r === rf || (r.includes('ite') && r === updates[rf]) ? 'none' : normalizeResult(r, rf);
-        });
-        rows.push({ label: prettyFieldValue(val, primarySubject), cells });
-      });
-      // Generate else row
-      const elseBindings = { [primarySubject]: '#xUnmatchedValue' };
-      const elseCells = rawFields.map((rf) => {
-         const r = evalSExpr(updates[rf], elseBindings);
-         return r === rf || (r.includes('ite') && r === updates[rf]) ? 'none' : normalizeResult(r, rf);
-      });
-      if (elseCells.some(c => c !== 'none')) {
-        rows.push({ label: 'else', isElse: true, cells: elseCells });
+  const branchesByField = new Map<string, FieldBranch[]>();
+  const conditionOrder: string[] = [];
+  const conditionInfo = new Map<string, { raw: string; atoms: Set<string> }>();
+
+  rawFields.forEach((field) => {
+    const branches = collectIteBranches(updates[field]);
+    branchesByField.set(field, branches);
+  });
+
+  const pivotField = rawFields.reduce((best, field) => {
+    if (!best) return field;
+    const bestScore = branchScore(branchesByField.get(best) || []);
+    const fieldScore = branchScore(branchesByField.get(field) || []);
+    return fieldScore > bestScore ? field : best;
+  }, rawFields[0] || '');
+
+  const pivotBranchesRaw = branchesByField.get(pivotField) || [];
+  const seenPivot = new Set<string>();
+  const pivotBranches = pivotBranchesRaw.filter((b) => {
+    if (seenPivot.has(b.conditionKey)) return false;
+    seenPivot.add(b.conditionKey);
+    return true;
+  });
+
+  pivotBranches.forEach((branch) => {
+    conditionInfo.set(branch.conditionKey, { raw: branch.condition, atoms: branch.atoms });
+    conditionOrder.push(branch.conditionKey);
+  });
+
+  return conditionOrder.map((conditionKey, rowIndex) => {
+    const info = conditionInfo.get(conditionKey)!;
+    const rowAtoms = info.atoms;
+    const rowTruth = buildTruthMapFromCondition(conditionKey);
+
+    const cells = rawFields.map((field) => {
+      const candidates = branchesByField.get(field) || [];
+      const exact = candidates.find((c) => c.conditionKey === conditionKey);
+
+      let selected = exact;
+      if (!selected) {
+        selected = candidates
+          .filter((c) => evalConditionWithTruth(c.conditionKey, rowTruth) === 'true')
+          .sort((a, b) => b.atomCount - a.atomCount)[0];
       }
-    } else {
-      // Unconditional assignment fallback
-      const row = rawFields.map((rf) => normalizeResult(updates[rf], rf));
-      rows.push({ label: 'Always', cells: row });
-    }
-  }
+      if (!selected) {
+        selected = candidates
+          .filter((c) => c.conditionKey === 'Always' || isSubset(c.atoms, rowAtoms))
+          .sort((a, b) => b.atomCount - a.atomCount)[0];
+      }
 
-  const pSubjFormat = primarySubject !== 'Condition' ? prettyField(primarySubject) : 'Condition';
+      if (!selected) return 'none';
+      const scalar = normalizeScalarSymbol(selected.result);
+      if (scalar === field) return 'none';
+      return normalizeResult(scalar, field);
+    });
+
+    const simplified = simplifyDisplayCondition(info.raw);
+    const normalizedLabel = prettyBranchConditionLabel(simplified, rowIndex, conditionOrder.length);
+    const isElse = normalizedLabel.toLowerCase().startsWith('else') || normalizedLabel === 'Always';
+    const stackedReachLines = (() => {
+      const lines: string[] = [];
+      lines.push('Inherited reach conditions:');
+      if (baseReachConditions.length) {
+        baseReachConditions.forEach((line) => lines.push(`- ${line}`));
+      } else {
+        lines.push('- none');
+      }
+      return lines;
+    })();
+    const stackedReachCompact = compactText(
+      `${baseReachConditions.length ? `${baseReachConditions.length} cond.` : 'none'}`,
+      14
+    );
+
+    return {
+      label: normalizedLabel,
+      isElse,
+      stackedReachLines,
+      stackedReachCompact,
+      cells,
+    };
+  });
+}
+
+function FieldUpdatesView({
+  updates,
+  stageLabel,
+  infoTooltip,
+  baseReachConditions = [],
+}: {
+  updates: Record<string, string>;
+  stageLabel?: string;
+  infoTooltip?: string;
+  baseReachConditions?: string[];
+}) {
+  const [showRaw, setShowRaw] = useState(false);
+  const columns = Object.keys(updates).map(k => prettyField(k));
+  const rows: FieldUpdateRow[] = showRaw ? [] : buildFieldUpdateRows(updates, baseReachConditions);
 
   return (
     <div style={{ marginBottom: '1rem' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.8rem' }}>
-        <strong style={{ color: 'var(--accent)', fontSize: '0.8rem' }}>Field Updates</strong>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+          <strong style={{ color: 'var(--accent)', fontSize: '0.8rem' }}>Field Updates (Current Stage)</strong>
+          {infoTooltip && (
+            <InfoHint text={infoTooltip} />
+          )}
+          {stageLabel && (
+            <span style={{ color: 'var(--text-muted)', fontSize: '0.68rem', fontFamily: 'monospace' }}>
+              {stageLabel}
+            </span>
+          )}
+        </div>
         <button onClick={() => setShowRaw(r => !r)} style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.7rem' }}>
           {showRaw ? <EyeOff size={12} /> : <Eye size={12} />} {showRaw ? 'Visual' : 'Raw SMT2'}
         </button>
@@ -303,13 +1353,16 @@ function FieldUpdatesView({ updates }: { updates: Record<string, string> }) {
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.75rem', minWidth: '400px' }}>
             <thead>
               <tr style={{ background: 'var(--bg-surface)', borderBottom: '1px solid var(--border)' }}>
-                <th colSpan={columns.length + 1} style={{ padding: '0.6rem 0.8rem', textAlign: 'center', color: 'var(--text-main)', fontSize: '0.75rem', fontWeight: 600 }}>
-                  <code style={{ color: '#38bdf8', fontFamily: 'monospace', fontWeight: 700, background: 'transparent', fontSize: '0.8rem' }}>{pSubjFormat}</code>
+                <th colSpan={columns.length + 2} style={{ padding: '0.6rem 0.8rem', textAlign: 'center', color: 'var(--text-main)', fontSize: '0.75rem', fontWeight: 600 }}>
+                  <code style={{ color: '#38bdf8', fontFamily: 'monospace', fontWeight: 700, background: 'transparent', fontSize: '0.8rem' }}>Conditions</code>
                 </th>
               </tr>
               <tr style={{ background: 'rgba(255,255,255,0.03)', borderBottom: '1px solid var(--border)' }}>
+                <th style={{ padding: '0.35rem 0.5rem', textAlign: 'left', color: 'var(--text-muted)', fontWeight: 600, fontSize: '0.7rem', borderRight: '1px solid var(--border)', width: '96px', minWidth: '96px', maxWidth: '110px', whiteSpace: 'nowrap' }}>
+                  Reach
+                </th>
                 <th style={{ padding: '0.4rem 0.8rem', textAlign: 'left', color: 'var(--text-muted)', fontWeight: 600, fontSize: '0.7rem', borderRight: '1px solid var(--border)', width: '15%' }}>
-                  {pSubjFormat}
+                  Row Condition
                 </th>
                 {columns.map(c => (
                   <th key={c} style={{ padding: '0.4rem 0.8rem', textAlign: 'left', color: 'var(--text-muted)', fontWeight: 600, fontSize: '0.7rem', borderRight: '1px solid var(--border)' }}>
@@ -321,7 +1374,24 @@ function FieldUpdatesView({ updates }: { updates: Record<string, string> }) {
             <tbody>
               {rows.map((row, i) => (
                 <tr key={i} style={{ borderBottom: i < rows.length - 1 ? '1px solid var(--border)' : 'none', background: row.isElse ? 'rgba(0,0,0,0.1)' : 'transparent' }}>
-                  <td style={{ padding: '0.4rem 0.8rem', borderRight: '1px solid var(--border)', fontFamily: 'monospace', color: row.isElse ? 'var(--text-muted)' : '#fbbf24', fontWeight: row.isElse ? 400 : 700 }}>
+                  <td style={{ padding: '0.35rem 0.5rem', borderRight: '1px solid var(--border)', width: '96px', minWidth: '96px', maxWidth: '110px' }}>
+                    <HoverTextHint text={row.stackedReachLines.join('\n')}>
+                      <span
+                        style={{
+                          display: 'block',
+                          fontFamily: 'monospace',
+                          color: '#93c5fd',
+                          whiteSpace: 'nowrap',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          fontSize: '0.72rem',
+                        }}
+                      >
+                        {row.stackedReachCompact}
+                      </span>
+                    </HoverTextHint>
+                  </td>
+                  <td style={{ padding: '0.4rem 0.8rem', borderRight: '1px solid var(--border)', fontFamily: 'monospace', color: row.isElse ? 'var(--text-muted)' : '#fbbf24', fontWeight: row.isElse ? 400 : 700, whiteSpace: 'normal', minWidth: '260px' }}>
                     {row.label}
                   </td>
                   {row.cells.map((cell, ci) => (
@@ -352,7 +1422,20 @@ const OP_COLORS: Record<string, { bg: string; color: string }> = {
 
 function Z3ConstraintsView({ constraints }: { constraints: string[] }) {
   const [showRaw, setShowRaw] = useState(false);
-  const parsed = constraints.map(parseConstraint);
+  const parsed = (() => {
+    const seen = new Set<string>();
+    const out: ReturnType<typeof parseConstraint>[] = [];
+    for (const raw of constraints) {
+      const p = parseConstraint(raw);
+      const key = !p.isComplex && p.field && p.op
+        ? `${p.field}|${p.op}|${String(p.value ?? '')}`
+        : prettyComplexConstraint(p.original).trim().replace(/\s+/g, ' ');
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(p);
+    }
+    return out;
+  })();
   return (
     <div style={{ marginBottom: '0.5rem' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
@@ -395,13 +1478,16 @@ function Z3ConstraintsView({ constraints }: { constraints: string[] }) {
 export default function RightPanel({
   activeVerification,
   verificationResult,
+  parentVerificationResult,
   compiledData,
 }: {
   activeVerification: { type: string; name: string } | null;
   verificationResult: any;
+  parentVerificationResult?: any;
   compiledData?: any;
 }) {
   const activeLogs: any[] = Array.isArray(verificationResult) ? verificationResult : [];
+  const parentStates: any[] = Array.isArray(parentVerificationResult) ? parentVerificationResult : [];
   const numPaths = activeLogs.length;
 
   const pathMapRef = useRef<Map<string, number>>(new Map());
@@ -485,6 +1571,7 @@ export default function RightPanel({
                   displayName={displayName}
                   activeVerification={activeVerification}
                   compiledData={compiledData}
+                  parentStates={parentStates}
                 />
               ))
             ) : (

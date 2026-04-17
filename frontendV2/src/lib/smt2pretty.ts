@@ -10,6 +10,36 @@ const ETHER_TYPES: Record<number, string> = {
   0x88CC: 'LLDP (0x88CC)',
 };
 
+function symbolicHint(raw: string, fieldName: string): string {
+  const trimmed = raw.trim();
+
+  // New backend naming: sym__<param_name>__...
+  if (trimmed.startsWith('sym__')) {
+    const parts = trimmed.split('__');
+    if (parts.length >= 2 && parts[1]) return `sym(${parts[1]})`;
+    return 'sym(?)';
+  }
+
+  // Legacy backend naming: entry_<id>_<table>_<action>_<param>_<dest>
+  if (trimmed.startsWith('entry_') || trimmed.startsWith('default_') || trimmed.startsWith('match_')) {
+    const fieldSuffix = fieldName.replace(/[.$]/g, '_');
+    let stem = trimmed;
+    if (fieldSuffix && stem.endsWith(`_${fieldSuffix}`)) {
+      stem = stem.slice(0, -(fieldSuffix.length + 1));
+    }
+
+    // Common case observed in ACL class assignment.
+    if (/_r_class(?:_|$)/.test(stem)) return 'sym(r_class)';
+
+    const parts = stem.split('_').filter(Boolean);
+    const tail = parts.slice(-2).join('_');
+    if (tail && !/^\d+$/.test(tail)) return `sym(${tail})`;
+    return 'sym(?)';
+  }
+
+  return trimmed;
+}
+
 // ---- Field-aware value formatter ----
 /** Format a raw SMT2 literal based on the field it belongs to. */
 export function prettyFieldValue(rawLiteral: string, fieldName: string): string {
@@ -20,7 +50,11 @@ export function prettyFieldValue(rawLiteral: string, fieldName: string): string 
   if (rawLiteral.startsWith('#x')) numVal = parseInt(rawLiteral.slice(2), 16);
   else if (rawLiteral.startsWith('#b')) numVal = parseInt(rawLiteral.slice(2), 2);
 
-  if (numVal === null) return rawLiteral; // pass-through for non-literals
+  if (numVal === null) {
+    // Humanize symbolic variables while keeping normal identifiers untouched.
+    if (rawLiteral.includes('.') || rawLiteral.includes('(') || rawLiteral.includes(' ')) return rawLiteral;
+    return symbolicHint(rawLiteral, fieldName);
+  }
 
   // 1-bit booleans (valid flags)
   if (rawLiteral.startsWith('#b') && rawLiteral.slice(2).length === 1) {
@@ -30,6 +64,17 @@ export function prettyFieldValue(rawLiteral: string, fieldName: string): string 
   // EtherType field
   if (field.includes('ethertype') || field.includes('ethertype')) {
     return ETHER_TYPES[numVal] ?? `0x${numVal.toString(16).toUpperCase().padStart(4, '0')}`;
+  }
+
+  const isIpv4AddrField =
+    field.includes('ipv4.') &&
+    (field.includes('dstaddr') || field.includes('srcaddr') || field.includes('ipaddr'));
+
+  // IP address (32-bit) — prioritize when field is explicitly IPv4.*
+  if (isIpv4AddrField) {
+    if (numVal >= 0 && numVal <= 0xFFFF_FFFF) {
+      return `${(numVal >>> 24) & 0xff}.${(numVal >>> 16) & 0xff}.${(numVal >>> 8) & 0xff}.${numVal & 0xff}`;
+    }
   }
 
   // MAC address (48-bit → xx:xx:xx:xx:xx:xx)
@@ -78,8 +123,22 @@ export interface ParsedConstraint {
 }
 
 export function parseConstraint(smt: string): ParsedConstraint {
+  const input = smt.trim();
+
+  // no-drop propagation constraint from backend:
+  // (distinct #b111111111 <expr>) or equivalent hex #x1ff
+  if (input.includes('distinct') && (input.includes('#b111111111') || input.includes('#x1ff'))) {
+    return {
+      original: smt,
+      field: prettyField('standard_metadata.egress_spec'),
+      op: '!=',
+      value: prettyFieldValue('#b111111111', 'standard_metadata.egress_spec'),
+      isComplex: false,
+    };
+  }
+
   // Simple equality: (= field.name #x...)
-  const eqMatch = smt.match(/^\(= ([a-zA-Z0-9_.$]+) (#[xb][0-9a-fA-F]+)\)$/);
+  const eqMatch = input.match(/^\(=\s+([a-zA-Z0-9_.$]+)\s+(#[xb][0-9a-fA-F]+)\)$/);
   if (eqMatch) {
     return {
       original: smt,
@@ -89,8 +148,21 @@ export function parseConstraint(smt: string): ParsedConstraint {
       isComplex: false,
     };
   }
+
+  // Reversed equality: (= #x... field.name)
+  const eqReversedMatch = input.match(/^\(=\s+(#[xb][0-9a-fA-F]+)\s+([a-zA-Z0-9_.$]+)\)$/);
+  if (eqReversedMatch) {
+    return {
+      original: smt,
+      field: prettyField(eqReversedMatch[2]),
+      op: '==',
+      value: prettyFieldValue(eqReversedMatch[1], eqReversedMatch[2]),
+      isComplex: false,
+    };
+  }
+
   // Negated equality: (not (= field.name #x...))
-  const notEqMatch = smt.match(/^\(not \(= ([a-zA-Z0-9_.$]+) (#[xb][0-9a-fA-F]+)\)\)$/);
+  const notEqMatch = input.match(/^\(not\s+\(=\s+([a-zA-Z0-9_.$]+)\s+(#[xb][0-9a-fA-F]+)\)\)$/);
   if (notEqMatch) {
     return {
       original: smt,
@@ -100,6 +172,19 @@ export function parseConstraint(smt: string): ParsedConstraint {
       isComplex: false,
     };
   }
+
+  // Reversed negated equality: (not (= #x... field.name))
+  const notEqReversedMatch = input.match(/^\(not\s+\(=\s+(#[xb][0-9a-fA-F]+)\s+([a-zA-Z0-9_.$]+)\)\)$/);
+  if (notEqReversedMatch) {
+    return {
+      original: smt,
+      field: prettyField(notEqReversedMatch[2]),
+      op: '!=',
+      value: prettyFieldValue(notEqReversedMatch[1], notEqReversedMatch[2]),
+      isComplex: false,
+    };
+  }
+
   return { original: smt, isComplex: true };
 }
 
