@@ -1,70 +1,51 @@
-# Dynamic Control‑Plane Configuration & Symbolic Hit/Miss Testing
+# Plano de Implementação — Execução Híbrida (Frontend V2 + Backend Real)
 
-## Goal
-Two **independent** modes for feeding the verifier, selectable via a toggle in the existing **Network Configuration** modal:
+## Objetivo
 
-1. **Routing Mode** – The user fills in routing entries for every table defined in the P4 program. The [NetworkConfigModal](file:///home/teste/Documents/symtest/p4symtest/frontendV2/src/components/NetworkConfigModal.tsx#224-302) generates the forms dynamically from the `table_schema` returned by the backend (instead of the current hard‑coded `ipv4_lpm` / `myTunnel_exact` / `egress_port_smac`). The result is written to [runtime_config.json](file:///home/teste/Documents/symtest/p4symtest/runtime_config.json) locally and passed to the verifier.
+Alinhar a execução com o artigo: priorizar regras concretas injetadas por mini-topology, com fallback simbólico apenas onde não há valor concreto disponível.
 
-2. **Symbolic Mode** – The user *does not* fill in any routing entry. The verifier automatically branches each table into its possible outcomes: **Miss** (default action) and **Hit** (each available non‑default action, with symbolic parameters). No [runtime_config.json](file:///home/teste/Documents/symtest/p4symtest/runtime_config.json) is needed.
+## Modelo funcional acordado
 
----
-## Proposed Changes
+1. Modo padrão: `auto_concrete`.
+2. Fallback por campo: quando um valor não é definido concretamente, usar simbólico.
+3. Modo alternativo: `full_symbolic` (força campos de match e parâmetros para simbólico).
+4. Override manual: usuário pode trocar qualquer campo simbólico para concreto no modal de configuração.
 
-### Backend ([mock_server.py](file:///home/teste/Documents/symtest/p4symtest/mock_backend/mock_server.py))
+## Estratégia técnica adotada
 
-#### [MODIFY] `/api/compiledData`
-Extend the response per table with a `table_schema` object:
-```json
-{
-  "name": "ipv4_acl",
-  "keys": [
-    {"field": "hdr.ipv4.srcAddr", "match_type": "ternary"},
-    {"field": "hdr.ipv4.dstAddr", "match_type": "ternary"}
-  ],
-  "actions": ["set_class", "NoAction"],
-  "default_action": "NoAction"
-}
-```
+1. Frontend V2 mantém configuração de topologia e tabelas por switch.
+2. Antes de verificar tabela (ingress/egress), V2 sincroniza automaticamente com backend real:
+- `topology.json` via `POST /api/upload/json` (`type=topology`)
+- `runtime_config.json` via `POST /api/upload/json` (`type=runtime_config`)
+3. `runtime_config` usa marcador `__symbolic__` para campos não concretizados.
+4. Scripts de execução no backend (`run_table.py`, `run_table_egress.py`) tratam `__symbolic__` (e vazio/symbolic) como variável Z3, sem fallback silencioso para `0`.
 
-#### [MODIFY] Verification endpoint
-- Accept a flag `symbolic_mode: boolean` alongside the existing `runtime_config` payload.
-- If `symbolic_mode = true`, ignore routing entries and produce one result set per table per action (hit branches) plus the miss branch.
-- If `symbolic_mode = false`, apply routing entries as today.
+## Semântica por modo
 
----
-### Frontend (React)
+### `auto_concrete`
 
-#### [MODIFY] [NetworkConfigModal.tsx](file:///home/teste/Documents/symtest/p4symtest/frontendV2/src/components/NetworkConfigModal.tsx) – Dynamic Form Generation
-- Remove hard‑coded [Ipv4Table](file:///home/teste/Documents/symtest/p4symtest/frontendV2/src/components/NetworkConfigModal.tsx#51-81), [TunnelTable](file:///home/teste/Documents/symtest/p4symtest/frontendV2/src/components/NetworkConfigModal.tsx#82-109), [EgressTable](file:///home/teste/Documents/symtest/p4symtest/frontendV2/src/components/NetworkConfigModal.tsx#110-137) sub‑components.
-- Read `compiledData.table_schema` (already fetched in [App.tsx](file:///home/teste/Documents/symtest/p4symtest/frontendV2/src/App.tsx)) and **dynamically render one collapsible section per table**.
-- Each section shows one row per key (respecting `match_type`: exact → text input, ternary → value + mask, lpm → IP + prefix length).
-- Action dropdown per row populated from `actions`.
+1. Auto-população tenta preencher concretamente com base na topologia.
+2. Campos vazios/indefinidos viram `__symbolic__` no payload sincronizado.
+3. No backend, parâmetros de ação ausentes/simbólicos geram `BitVec` fresco.
 
-#### [ADD] Toggle "Routing Mode / Symbolic Mode"
-- A prominent toggle in the modal header.
-- When **Symbolic Mode** is selected, the routing‑entry forms are greyed out / hidden and a banner explains that the verifier will explore all hit/miss branches automatically.
+### `full_symbolic`
 
-#### [MODIFY] [RightPanel.tsx](file:///home/teste/Documents/symtest/p4symtest/frontendV2/src/components/RightPanel.tsx) – Hit/Miss Visualisation (Symbolic Mode)
-- When the response contains symbolically‑generated branches, display a **"Hit: `action_name`"** badge and a **"Miss: `default_action`"** badge on each path row.
-- The existing matrix view continues to work for concrete (Routing Mode) updates.
+1. Frontend converte os valores de match para `__symbolic__`.
+2. Frontend remove parâmetros concretos de ação no upload.
+3. Backend cria variáveis simbólicas para parâmetros runtime usados pelas ações.
 
----
-### Shared Types ([src/lib/api.ts](file:///home/teste/Documents/symtest/p4symtest/frontendV2/src/lib/api.ts))
-```ts
-export interface TableSchema {
-  name: string;
-  keys: Array<{field: string; match_type: string}>;
-  actions: string[];
-  default_action: string;
-}
-// Extended CompiledData already includes pipelines; add table_schema per table entry
-```
+## Status atual nesta branch
 
----
-## Verification Plan
+1. `NetworkConfigModal` agora expõe seletor de modo de execução (`auto_concrete` / `full_symbolic`).
+2. `LeftPanel` propaga a configuração atual para o `App`.
+3. `CenterPanel` sincroniza configuração no backend real antes de rodar análise de tabela.
+4. `api.ts` converte `TopologyConfig` da V2 para formatos de `topology.json` e `runtime_config.json` aceitos pelo backend.
+5. `run_table.py` e `run_table_egress.py` atualizados para fallback simbólico explícito (incluindo matchs/params simbólicos).
 
-### Manual
-1. Open **Network Configuration** modal with [custom_test.p4](file:///home/teste/Documents/symtest/p4symtest/backend/workspace/custom_test.p4) loaded.
-2. Verify that forms for `ipv4_lpm`, `ipv4_acl`, `tcp_exact` and `egress_port_smac` appear automatically (no `myTunnel_exact`).
-3. Fill in a concrete rule for `ipv4_acl` (Routing Mode) → click Verify → RightPanel shows field updates for that path.
-4. Switch to **Symbolic Mode** → click Verify → RightPanel shows labelled **Hit** and **Miss** paths for every table, including `ipv4_acl` and `tcp_exact`.
+## Validação mínima esperada
+
+1. Compilar P4.
+2. Rodar parser.
+3. Verificar tabela em `auto_concrete` com pelo menos um campo vazio (deve virar simbólico, não zero).
+4. Alternar para `full_symbolic` e repetir verificação.
+5. Ajustar manualmente um campo simbólico para concreto e confirmar alteração no comportamento.

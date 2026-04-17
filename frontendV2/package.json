@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "test": "vitest run",
+    "test:field-updates": "vitest run src/components/RightPanel.fieldUpdatesRows.test.ts",
+    "build": "npm run test:field-updates && tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview"
   },
@@ -29,6 +31,7 @@
     "globals": "^17.4.0",
     "typescript": "~5.9.3",
     "typescript-eslint": "^8.56.1",
-    "vite": "^8.0.0"
+    "vite": "^8.0.0",
+    "vitest": "^4.1.4"
   }
 }

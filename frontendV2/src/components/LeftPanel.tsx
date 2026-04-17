@@ -1,7 +1,8 @@
 import { useState, useRef, useEffect } from 'react';
 import { FolderTree, Settings, ChevronLeft, ChevronRight, Plus, FolderUp } from 'lucide-react';
 import NetworkConfigModal, { useNetworkConfig } from './NetworkConfigModal';
-import { getApiScenario, setApiScenario, fetchMockSource } from '../lib/api';
+import type { TopologyConfig } from './NetworkConfigModal';
+import { getApiScenario, setApiScenario, fetchMockSource, isMockApi } from '../lib/api';
 import type { TableSchema } from '../lib/api';
 
 export default function LeftPanel({ 
@@ -13,6 +14,7 @@ export default function LeftPanel({
   onUploadFile = () => {},
   onSelectFile = () => {},
   tableSchemas = [],
+  onConfigChange = () => {},
 }: { 
   isCollapsed?: boolean, 
   onToggle?: () => void,
@@ -22,6 +24,7 @@ export default function LeftPanel({
   onUploadFile?: (name: string, content: string) => void,
   onSelectFile?: (name: string) => void,
   tableSchemas?: TableSchema[],
+  onConfigChange?: (config: TopologyConfig) => void,
 }) {
   const [showConfig, setShowConfig] = useState(false);
   const { config, setConfig } = useNetworkConfig(tableSchemas);
@@ -65,7 +68,7 @@ export default function LeftPanel({
 
   // Auto-load the source code for the current scenario on mount
   useEffect(() => {
-    if (import.meta.env.DEV) {
+    if (import.meta.env.DEV && isMockApi()) {
       fetchMockSource()
         .then(res => {
           if (res.source) onUploadFile('programa.p4', res.source);
@@ -73,6 +76,10 @@ export default function LeftPanel({
         .catch(err => console.error("Could not fetch mock source:", err));
     }
   }, []);
+
+  useEffect(() => {
+    onConfigChange(config);
+  }, [config, onConfigChange]);
 
   return (
     <>
@@ -180,7 +187,7 @@ export default function LeftPanel({
       </div>
 
       {/* ---- Scenario Toggle ---- */}
-      {!isCollapsed && import.meta.env.DEV && (
+      {!isCollapsed && import.meta.env.DEV && isMockApi() && (
         <div style={{ padding: '0.6rem 1rem', borderTop: '1px solid var(--border)', borderBottom: '1px solid var(--border)' }}>
           <label style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Mock Scenario</label>
           <select
@@ -214,6 +221,10 @@ export default function LeftPanel({
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem' }}>
                 <span style={{ color: 'var(--text-muted)' }}>Table entries</span>
                 <span style={{ color: 'var(--text-main)' }}>{totalEntries}</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem' }}>
+                <span style={{ color: 'var(--text-muted)' }}>Execution mode</span>
+                <span style={{ color: 'var(--accent)', fontFamily: 'monospace' }}>{config.executionMode}</span>
               </div>
               <div
                 style={{ marginTop: '0.2rem', fontSize: '0.7rem', color: 'var(--accent)', display: 'flex', alignItems: 'center', gap: '0.3rem', opacity: 0.8 }}

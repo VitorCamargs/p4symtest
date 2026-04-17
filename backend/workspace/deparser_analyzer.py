@@ -111,11 +111,12 @@ def analyze_single_state_emission(
                  if field_key and field_key in fields_z3:
                      target_var = fields_z3[field_key]
                      try:
-                         # Tenta parsear a expressão SMT-LIB do valor
-                         value_expr = parse_smt2_string(expr_str, decls=decls_map)
-                         # Cria a restrição de atualização
-                         update_constraint = (target_var == value_expr)
-                         solver.add(update_constraint)
+                         # Parseia como asserção completa para evitar AstVector vazio em termos puros.
+                         wrapped_update = f"(assert (= {target_var.sexpr()} {expr_str}))"
+                         parsed_updates = parse_smt2_string(wrapped_update, decls=decls_map)
+                         if len(parsed_updates) == 0:
+                             raise Z3Exception("Atualização SMT não gerou asserção válida")
+                         solver.add(*parsed_updates)
                      except Z3Exception as e_parse:
                          log.warning(f"Erro Z3 ao parsear/aplicar field_update '{field_str} = {expr_str}' no estado {state_index}: {e_parse}")
                      except Exception as e_non_z3: # Erro genérico no parsing SMT

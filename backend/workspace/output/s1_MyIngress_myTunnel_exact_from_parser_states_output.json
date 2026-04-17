@@ -8,7 +8,7 @@
       "(= ethernet.$valid$ #b1)",
       "(= myTunnel.$valid$ #b1)",
       "(= ipv4.$valid$ #b1)",
-      "(let ((a!1 (ite (= myTunnel.dst_id #x0001)\n                #b000000001\n                (ite (= myTunnel.dst_id #x0002)\n                     #b000000010\n                     (ite (= myTunnel.dst_id #x0003) #b000000011 #b111111111)))))\n  (distinct a!1 #b111111111))"
+      "(distinct (ite (= myTunnel.dst_id #x000b)\n               #b000000001\n               (ite (= myTunnel.dst_id #x000c) #b000000010 #b111111111))\n          #b111111111)"
     ],
     "present_headers": [
       "ethernet",
@@ -20,7 +20,7 @@
       "MyIngress.myTunnel_exact"
     ],
     "field_updates": {
-      "standard_metadata.egress_spec": "(ite (= myTunnel.dst_id #x0001)\n     #b000000001\n     (ite (= myTunnel.dst_id #x0002)\n          #b000000010\n          (ite (= myTunnel.dst_id #x0003) #b000000011 #b111111111)))"
+      "standard_metadata.egress_spec": "(ite (= myTunnel.dst_id #x000b)\n     #b000000001\n     (ite (= myTunnel.dst_id #x000c) #b000000010 #b111111111))"
     }
   },
   {
@@ -32,7 +32,7 @@
       "(= ethernet.$valid$ #b1)",
       "(= myTunnel.$valid$ #b1)",
       "(= ipv4.$valid$ #b0)",
-      "(let ((a!1 (ite (= myTunnel.dst_id #x0001)\n                #b000000001\n                (ite (= myTunnel.dst_id #x0002)\n                     #b000000010\n                     (ite (= myTunnel.dst_id #x0003) #b000000011 #b111111111)))))\n  (distinct a!1 #b111111111))"
+      "(distinct (ite (= myTunnel.dst_id #x000b)\n               #b000000001\n               (ite (= myTunnel.dst_id #x000c) #b000000010 #b111111111))\n          #b111111111)"
     ],
     "present_headers": [
       "ethernet",
@@ -43,7 +43,7 @@
       "MyIngress.myTunnel_exact"
     ],
     "field_updates": {
-      "standard_metadata.egress_spec": "(ite (= myTunnel.dst_id #x0001)\n     #b000000001\n     (ite (= myTunnel.dst_id #x0002)\n          #b000000010\n          (ite (= myTunnel.dst_id #x0003) #b000000011 #b111111111)))"
+      "standard_metadata.egress_spec": "(ite (= myTunnel.dst_id #x000b)\n     #b000000001\n     (ite (= myTunnel.dst_id #x000c) #b000000010 #b111111111))"
     }
   },
   {

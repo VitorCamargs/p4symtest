@@ -3,7 +3,10 @@
     {
       "name" : "scalars_0",
       "id" : 0,
-      "fields" : []
+      "fields" : [
+        ["metadata.condicao", 8, false],
+        ["metadata.routing_class", 8, false]
+      ]
     },
     {
       "name" : "standard_metadata",
@@ -38,16 +41,8 @@
       ]
     },
     {
-      "name" : "myTunnel_t",
-      "id" : 3,
-      "fields" : [
-        ["proto_id", 16, false],
-        ["dst_id", 16, false]
-      ]
-    },
-    {
       "name" : "ipv4_t",
-      "id" : 4,
+      "id" : 3,
       "fields" : [
         ["version", 4, false],
         ["ihl", 4, false],
@@ -87,15 +82,8 @@
       "pi_omit" : true
     },
     {
-      "name" : "myTunnel",
-      "id" : 3,
-      "header_type" : "myTunnel_t",
-      "metadata" : false,
-      "pi_omit" : true
-    },
-    {
       "name" : "ipv4",
-      "id" : 4,
+      "id" : 3,
       "header_type" : "ipv4_t",
       "metadata" : false,
       "pi_omit" : true
@@ -139,12 +127,6 @@
           "transitions" : [
             {
               "type" : "hexstr",
-              "value" : "0x1212",
-              "mask" : null,
-              "next_state" : "parse_myTunnel"
-            },
-            {
-              "type" : "hexstr",
               "value" : "0x0800",
               "mask" : null,
               "next_state" : "parse_ipv4"
@@ -164,43 +146,8 @@
           ]
         },
         {
-          "name" : "parse_myTunnel",
-          "id" : 1,
-          "parser_ops" : [
-            {
-              "parameters" : [
-                {
-                  "type" : "regular",
-                  "value" : "myTunnel"
-                }
-              ],
-              "op" : "extract"
-            }
-          ],
-          "transitions" : [
-            {
-              "type" : "hexstr",
-              "value" : "0x0800",
-              "mask" : null,
-              "next_state" : "parse_ipv4"
-            },
-            {
-              "type" : "default",
-              "value" : null,
-              "mask" : null,
-              "next_state" : null
-            }
-          ],
-          "transition_key" : [
-            {
-              "type" : "field",
-              "value" : ["myTunnel", "proto_id"]
-            }
-          ]
-        },
-        {
           "name" : "parse_ipv4",
-          "id" : 2,
+          "id" : 1,
           "parser_ops" : [
             {
               "parameters" : [
@@ -232,11 +179,11 @@
       "id" : 0,
       "source_info" : {
         "filename" : "/app/workspace/p4files/programa.p4",
-        "line" : 197,
+        "line" : 180,
         "column" : 8,
         "source_fragment" : "MyDeparser"
       },
-      "order" : ["ethernet", "myTunnel", "ipv4"],
+      "order" : ["ethernet", "ipv4"],
       "primitives" : []
     }
   ],
@@ -249,7 +196,7 @@
       "id" : 0,
       "source_info" : {
         "filename" : "/app/workspace/p4files/programa.p4",
-        "line" : 175,
+        "line" : 159,
         "column" : 8,
         "source_fragment" : "update_checksum( ..."
       },
@@ -311,55 +258,23 @@
       "primitives" : []
     },
     {
-      "name" : "MyIngress.drop",
+      "name" : "NoAction",
       "id" : 1,
       "runtime_data" : [],
-      "primitives" : [
-        {
-          "op" : "mark_to_drop",
-          "parameters" : [
-            {
-              "type" : "header",
-              "value" : "standard_metadata"
-            }
-          ],
-          "source_info" : {
-            "filename" : "/app/workspace/p4files/programa.p4",
-            "line" : 107,
-            "column" : 8,
-            "source_fragment" : "mark_to_drop(standard_metadata)"
-          }
-        }
-      ]
+      "primitives" : []
     },
     {
-      "name" : "MyIngress.drop",
+      "name" : "NoAction",
       "id" : 2,
       "runtime_data" : [],
-      "primitives" : [
-        {
-          "op" : "mark_to_drop",
-          "parameters" : [
-            {
-              "type" : "header",
-              "value" : "standard_metadata"
-            }
-          ],
-          "source_info" : {
-            "filename" : "/app/workspace/p4files/programa.p4",
-            "line" : 107,
-            "column" : 8,
-            "source_fragment" : "mark_to_drop(standard_metadata)"
-          }
-        }
-      ]
+      "primitives" : []
     },
     {
-      "name" : "MyIngress.ipv4_forward",
+      "name" : "MyIngress.set_nhop",
       "id" : 3,
       "runtime_data" : [
         {
-          "name" : "dstAddr",
+          "name" : "nhop_dmac",
           "bitwidth" : 48
         },
         {
@@ -382,7 +297,7 @@
           ],
           "source_info" : {
             "filename" : "/app/workspace/p4files/programa.p4",
-            "line" : 111,
+            "line" : 77,
             "column" : 8,
             "source_fragment" : "standard_metadata.egress_spec = port"
           }
@@ -401,7 +316,7 @@
           ],
           "source_info" : {
             "filename" : "/app/workspace/p4files/programa.p4",
-            "line" : 112,
+            "line" : 78,
             "column" : 8,
             "source_fragment" : "hdr.ethernet.srcAddr = hdr.ethernet.dstAddr"
           }
@@ -420,9 +335,9 @@
           ],
           "source_info" : {
             "filename" : "/app/workspace/p4files/programa.p4",
-            "line" : 113,
+            "line" : 79,
             "column" : 8,
-            "source_fragment" : "hdr.ethernet.dstAddr = dstAddr"
+            "source_fragment" : "hdr.ethernet.dstAddr = nhop_dmac"
           }
         },
         {
@@ -462,7 +377,7 @@
           ],
           "source_info" : {
             "filename" : "/app/workspace/p4files/programa.p4",
-            "line" : 114,
+            "line" : 80,
             "column" : 8,
             "source_fragment" : "hdr.ipv4.ttl = hdr.ipv4.ttl - 1"
           }
@@ -470,12 +385,12 @@
       ]
     },
     {
-      "name" : "MyIngress.myTunnel_forward",
+      "name" : "MyIngress.set_class",
       "id" : 4,
       "runtime_data" : [
         {
-          "name" : "port",
-          "bitwidth" : 9
+          "name" : "tag",
+          "bitwidth" : 8
         }
       ],
       "primitives" : [
@@ -484,7 +399,7 @@
           "parameters" : [
             {
               "type" : "field",
-              "value" : ["standard_metadata", "egress_spec"]
+              "value" : ["scalars", "metadata.condicao"]
             },
             {
               "type" : "runtime_data",
@@ -493,9 +408,104 @@
           ],
           "source_info" : {
             "filename" : "/app/workspace/p4files/programa.p4",
-            "line" : 131,
+            "line" : 98,
             "column" : 8,
-            "source_fragment" : "standard_metadata.egress_spec = port"
+            "source_fragment" : "meta.condicao = tag"
+          }
+        }
+      ]
+    },
+    {
+      "name" : "MyIngress.set_post_acl_tag",
+      "id" : 5,
+      "runtime_data" : [
+        {
+          "name" : "tag",
+          "bitwidth" : 8
+        }
+      ],
+      "primitives" : [
+        {
+          "op" : "assign",
+          "parameters" : [
+            {
+              "type" : "field",
+              "value" : ["scalars", "metadata.routing_class"]
+            },
+            {
+              "type" : "runtime_data",
+              "value" : 0
+            }
+          ],
+          "source_info" : {
+            "filename" : "/app/workspace/p4files/programa.p4",
+            "line" : 116,
+            "column" : 8,
+            "source_fragment" : "meta.routing_class = tag"
+          }
+        },
+        {
+          "op" : "assign",
+          "parameters" : [
+            {
+              "type" : "field",
+              "value" : ["ipv4", "diffserv"]
+            },
+            {
+              "type" : "runtime_data",
+              "value" : 0
+            }
+          ],
+          "source_info" : {
+            "filename" : "/app/workspace/p4files/programa.p4",
+            "line" : 117,
+            "column" : 8,
+            "source_fragment" : "hdr.ipv4.diffserv = tag"
+          }
+        }
+      ]
+    },
+    {
+      "name" : "programa134",
+      "id" : 6,
+      "runtime_data" : [],
+      "primitives" : [
+        {
+          "op" : "assign",
+          "parameters" : [
+            {
+              "type" : "field",
+              "value" : ["scalars", "metadata.condicao"]
+            },
+            {
+              "type" : "hexstr",
+              "value" : "0x00"
+            }
+          ],
+          "source_info" : {
+            "filename" : "/app/workspace/p4files/programa.p4",
+            "line" : 134,
+            "column" : 8,
+            "source_fragment" : "meta.condicao = 0"
+          }
+        },
+        {
+          "op" : "assign",
+          "parameters" : [
+            {
+              "type" : "field",
+              "value" : ["scalars", "metadata.routing_class"]
+            },
+            {
+              "type" : "hexstr",
+              "value" : "0x00"
+            }
+          ],
+          "source_info" : {
+            "filename" : "/app/workspace/p4files/programa.p4",
+            "line" : 135,
+            "column" : 8,
+            "source_fragment" : "meta.routing_class = 0"
           }
         }
       ]
@@ -507,18 +517,47 @@
       "id" : 0,
       "source_info" : {
         "filename" : "/app/workspace/p4files/programa.p4",
-        "line" : 103,
+        "line" : 71,
         "column" : 8,
         "source_fragment" : "MyIngress"
       },
-      "init_table" : "node_2",
+      "init_table" : "tbl_programa134",
       "tables" : [
         {
-          "name" : "MyIngress.ipv4_lpm",
+          "name" : "tbl_programa134",
           "id" : 0,
           "source_info" : {
             "filename" : "/app/workspace/p4files/programa.p4",
-            "line" : 117,
+            "line" : 134,
+            "column" : 22,
+            "source_fragment" : "= 0; ..."
+          },
+          "key" : [],
+          "match_type" : "exact",
+          "type" : "simple",
+          "max_size" : 1024,
+          "with_counters" : false,
+          "support_timeout" : false,
+          "direct_meters" : null,
+          "action_ids" : [6],
+          "actions" : ["programa134"],
+          "base_default_next" : "node_3",
+          "next_tables" : {
+            "programa134" : "node_3"
+          },
+          "default_entry" : {
+            "action_id" : 6,
+            "action_const" : true,
+            "action_data" : [],
+            "action_entry_const" : true
+          }
+        },
+        {
+          "name" : "MyIngress.ipv4_lpm",
+          "id" : 1,
+          "source_info" : {
+            "filename" : "/app/workspace/p4files/programa.p4",
+            "line" : 84,
             "column" : 10,
             "source_fragment" : "ipv4_lpm"
           },
@@ -532,17 +571,59 @@
           ],
           "match_type" : "lpm",
           "type" : "simple",
-          "max_size" : 1024,
+          "max_size" : 128,
           "with_counters" : false,
           "support_timeout" : false,
           "direct_meters" : null,
-          "action_ids" : [3, 1, 0],
-          "actions" : ["MyIngress.ipv4_forward", "MyIngress.drop", "NoAction"],
-          "base_default_next" : "node_4",
+          "action_ids" : [3, 0],
+          "actions" : ["MyIngress.set_nhop", "NoAction"],
+          "base_default_next" : "MyIngress.ipv4_acl",
           "next_tables" : {
-            "MyIngress.ipv4_forward" : "node_4",
-            "MyIngress.drop" : "node_4",
-            "NoAction" : "node_4"
+            "MyIngress.set_nhop" : "MyIngress.ipv4_acl",
+            "NoAction" : "MyIngress.ipv4_acl"
+          },
+          "default_entry" : {
+            "action_id" : 0,
+            "action_const" : false,
+            "action_data" : [],
+            "action_entry_const" : false
+          }
+        },
+        {
+          "name" : "MyIngress.ipv4_acl",
+          "id" : 2,
+          "source_info" : {
+            "filename" : "/app/workspace/p4files/programa.p4",
+            "line" : 102,
+            "column" : 10,
+            "source_fragment" : "ipv4_acl"
+          },
+          "key" : [
+            {
+              "match_type" : "ternary",
+              "name" : "hdr.ipv4.srcAddr",
+              "target" : ["ipv4", "srcAddr"],
+              "mask" : null
+            },
+            {
+              "match_type" : "ternary",
+              "name" : "hdr.ipv4.dstAddr",
+              "target" : ["ipv4", "dstAddr"],
+              "mask" : null
+            }
+          ],
+          "match_type" : "ternary",
+          "type" : "simple",
+          "max_size" : 128,
+          "with_counters" : false,
+          "support_timeout" : false,
+          "direct_meters" : null,
+          "action_ids" : [4, 1],
+          "actions" : ["MyIngress.set_class", "NoAction"],
+          "base_default_next" : "node_6",
+          "next_tables" : {
+            "MyIngress.set_class" : "node_6",
+            "NoAction" : "node_6"
           },
           "default_entry" : {
             "action_id" : 1,
@@ -552,34 +633,34 @@
           }
         },
         {
-          "name" : "MyIngress.myTunnel_exact",
-          "id" : 1,
+          "name" : "MyIngress.class_gate",
+          "id" : 3,
           "source_info" : {
             "filename" : "/app/workspace/p4files/programa.p4",
-            "line" : 134,
+            "line" : 121,
             "column" : 10,
-            "source_fragment" : "myTunnel_exact"
+            "source_fragment" : "class_gate"
           },
           "key" : [
             {
               "match_type" : "exact",
-              "name" : "hdr.myTunnel.dst_id",
-              "target" : ["myTunnel", "dst_id"],
+              "name" : "hdr.ipv4.dstAddr",
+              "target" : ["ipv4", "dstAddr"],
               "mask" : null
             }
           ],
           "match_type" : "exact",
           "type" : "simple",
-          "max_size" : 1024,
+          "max_size" : 64,
           "with_counters" : false,
           "support_timeout" : false,
           "direct_meters" : null,
-          "action_ids" : [4, 2],
-          "actions" : ["MyIngress.myTunnel_forward", "MyIngress.drop"],
+          "action_ids" : [5, 2],
+          "actions" : ["MyIngress.set_post_acl_tag", "NoAction"],
           "base_default_next" : null,
           "next_tables" : {
-            "MyIngress.myTunnel_forward" : null,
-            "MyIngress.drop" : null
+            "MyIngress.set_post_acl_tag" : null,
+            "NoAction" : null
           },
           "default_entry" : {
             "action_id" : 2,
@@ -592,60 +673,13 @@
       "action_profiles" : [],
       "conditionals" : [
         {
-          "name" : "node_2",
+          "name" : "node_3",
           "id" : 0,
           "source_info" : {
             "filename" : "/app/workspace/p4files/programa.p4",
-            "line" : 147,
+            "line" : 137,
             "column" : 12,
-            "source_fragment" : "hdr.ipv4.isValid() && !hdr.myTunnel.isValid()"
-          },
-          "expression" : {
-            "type" : "expression",
-            "value" : {
-              "op" : "and",
-              "left" : {
-                "type" : "expression",
-                "value" : {
-                  "op" : "d2b",
-                  "left" : null,
-                  "right" : {
-                    "type" : "field",
-                    "value" : ["ipv4", "$valid$"]
-                  }
-                }
-              },
-              "right" : {
-                "type" : "expression",
-                "value" : {
-                  "op" : "not",
-                  "left" : null,
-                  "right" : {
-                    "type" : "expression",
-                    "value" : {
-                      "op" : "d2b",
-                      "left" : null,
-                      "right" : {
-                        "type" : "field",
-                        "value" : ["myTunnel", "$valid$"]
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "true_next" : "MyIngress.ipv4_lpm",
-          "false_next" : "node_4"
-        },
-        {
-          "name" : "node_4",
-          "id" : 1,
-          "source_info" : {
-            "filename" : "/app/workspace/p4files/programa.p4",
-            "line" : 152,
-            "column" : 12,
-            "source_fragment" : "hdr.myTunnel.isValid()"
+            "source_fragment" : "hdr.ipv4.isValid()"
           },
           "expression" : {
             "type" : "expression",
@@ -654,12 +688,38 @@
               "left" : null,
               "right" : {
                 "type" : "field",
-                "value" : ["myTunnel", "$valid$"]
+                "value" : ["ipv4", "$valid$"]
               }
             }
           },
           "false_next" : null,
-          "true_next" : "MyIngress.myTunnel_exact"
+          "true_next" : "MyIngress.ipv4_lpm"
+        },
+        {
+          "name" : "node_6",
+          "id" : 1,
+          "source_info" : {
+            "filename" : "/app/workspace/p4files/programa.p4",
+            "line" : 142,
+            "column" : 16,
+            "source_fragment" : "meta.condicao == 1"
+          },
+          "expression" : {
+            "type" : "expression",
+            "value" : {
+              "op" : "==",
+              "left" : {
+                "type" : "field",
+                "value" : ["scalars", "metadata.condicao"]
+              },
+              "right" : {
+                "type" : "hexstr",
+                "value" : "0x01"
+              }
+            }
+          },
+          "false_next" : null,
+          "true_next" : "MyIngress.class_gate"
         }
       ]
     },
@@ -668,7 +728,7 @@
       "id" : 1,
       "source_info" : {
         "filename" : "/app/workspace/p4files/programa.p4",
-        "line" : 163,
+        "line" : 149,
         "column" : 8,
         "source_fragment" : "MyEgress"
       },
@@ -684,7 +744,7 @@
       "id" : 0,
       "source_info" : {
         "filename" : "/app/workspace/p4files/programa.p4",
-        "line" : 175,
+        "line" : 159,
         "column" : 8,
         "source_fragment" : "update_checksum( ..."
       },

@@ -4,7 +4,7 @@
 import json
 import sys
 import z3
-from z3 import BoolVal, BitVecVal, BitVec, And, Or, Not, If, Solver, sat, unsat, is_false, Extract, ZeroExt, BitVecSort
+from z3 import BoolVal, BitVecVal, BitVec, And, Or, Not, If, Solver, sat, unsat, is_false, Extract, ZeroExt, BitVecSort, UGT, ULT, UGE, ULE, is_const, is_expr, Z3_OP_UNINTERPRETED
 
 # --- Funções Auxiliares ---
 
@@ -33,22 +33,153 @@ def get_vars_from_expr(expr):
 
 # --- LÓGICA DE ANÁLISE DE FLUXO E TRADUÇÃO PARA Z3 (sem alterações) ---
 
-def build_z3_expression_for_conditional(expr_node, fields):
-    if not expr_node: return BoolVal(True)
-    if expr_node.get('type') == 'expression':
-        return build_z3_expression_for_conditional(expr_node['value'], fields)
-    op = expr_node.get('op')
-    if not op: return BoolVal(True)
-    if op == 'd2b':
-        h, f = expr_node['right']['value']
-        return fields.get((h, f)) == 1
-    elif op == 'not':
-        return Not(build_z3_expression_for_conditional(expr_node['right'], fields))
-    elif op == 'and':
-        left = build_z3_expression_for_conditional(expr_node['left'], fields)
-        right = build_z3_expression_for_conditional(expr_node['right'], fields)
-        return And(left, right)
+def _field_key_from_node_value(field_val):
+    if not isinstance(field_val, (list, tuple)):
+        return None
+    if len(field_val) == 2:
+        return tuple(field_val)
+    if len(field_val) >= 3:
+        return (field_val[-2], field_val[-1])
+    return None
+
+def _to_boolref(value):
+    if isinstance(value, z3.BoolRef):
+        return value
+    if isinstance(value, bool):
+        return BoolVal(value)
+    if isinstance(value, int):
+        return BoolVal(value != 0)
+    if isinstance(value, z3.BitVecRef):
+        if value.size() == 1:
+            return value == BitVecVal(1, 1)
+        return value != BitVecVal(0, value.size())
     return BoolVal(True)
+
+def _coerce_for_comparison(left, right):
+    if isinstance(left, bool):
+        left = BoolVal(left)
+    if isinstance(right, bool):
+        right = BoolVal(right)
+
+    if isinstance(left, z3.BoolRef) or isinstance(right, z3.BoolRef):
+        return _to_boolref(left), _to_boolref(right), 'bool'
+
+    if isinstance(left, z3.BitVecRef) and isinstance(right, int):
+        right = BitVecVal(right, left.size())
+    if isinstance(right, z3.BitVecRef) and isinstance(left, int):
+        left = BitVecVal(left, right.size())
+
+    if isinstance(left, int) and isinstance(right, int):
+        return left, right, 'int'
+
+    if isinstance(left, z3.BitVecRef) and isinstance(right, z3.BitVecRef):
+        left_size = left.size()
+        right_size = right.size()
+        if left_size != right_size:
+            if left_size > right_size:
+                right = ZeroExt(left_size - right_size, right)
+            else:
+                left = ZeroExt(right_size - left_size, left)
+        return left, right, 'bv'
+
+    return left, right, 'unknown'
+
+def _compare_terms(op, left, right):
+    left, right, kind = _coerce_for_comparison(left, right)
+
+    if kind == 'bool':
+        if op == '==':
+            return left == right
+        if op == '!=':
+            return left != right
+        return BoolVal(False)
+
+    if kind == 'int':
+        if op == '==':
+            return BoolVal(left == right)
+        if op == '!=':
+            return BoolVal(left != right)
+        if op == '>':
+            return BoolVal(left > right)
+        if op == '<':
+            return BoolVal(left < right)
+        if op == '>=':
+            return BoolVal(left >= right)
+        if op == '<=':
+            return BoolVal(left <= right)
+        return BoolVal(False)
+
+    if kind == 'bv':
+        if op == '==':
+            return left == right
+        if op == '!=':
+            return left != right
+        if op == '>':
+            return UGT(left, right)
+        if op == '<':
+            return ULT(left, right)
+        if op == '>=':
+            return UGE(left, right)
+        if op == '<=':
+            return ULE(left, right)
+        return BoolVal(False)
+
+    if op == '==':
+        return left == right if isinstance(left, z3.ExprRef) and isinstance(right, z3.ExprRef) else BoolVal(False)
+    if op == '!=':
+        return left != right if isinstance(left, z3.ExprRef) and isinstance(right, z3.ExprRef) else BoolVal(False)
+    return BoolVal(True)
+
+def _build_conditional_term(expr_node, fields):
+    if not expr_node:
+        return BoolVal(True)
+
+    node_type = expr_node.get('type')
+    if node_type == 'expression':
+        return _build_conditional_term(expr_node.get('value'), fields)
+    if node_type == 'field':
+        key = _field_key_from_node_value(expr_node.get('value'))
+        return fields.get(key)
+    if node_type == 'hexstr':
+        try:
+            return int(expr_node.get('value', '0'), 16)
+        except Exception:
+            return 0
+    if node_type in ('bool', 'boolean'):
+        value = expr_node.get('value')
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.strip().lower() == 'true'
+        return bool(value)
+
+    op = expr_node.get('op')
+    if not op:
+        return None
+
+    if op == 'd2b':
+        right_term = _build_conditional_term(expr_node.get('right'), fields)
+        return _to_boolref(right_term)
+    if op == 'not':
+        right_term = _build_conditional_term(expr_node.get('right'), fields)
+        return Not(_to_boolref(right_term))
+    if op == 'and':
+        left_term = _build_conditional_term(expr_node.get('left'), fields)
+        right_term = _build_conditional_term(expr_node.get('right'), fields)
+        return And(_to_boolref(left_term), _to_boolref(right_term))
+    if op == 'or':
+        left_term = _build_conditional_term(expr_node.get('left'), fields)
+        right_term = _build_conditional_term(expr_node.get('right'), fields)
+        return Or(_to_boolref(left_term), _to_boolref(right_term))
+    if op in ('==', '!=', '>', '<', '>=', '<='):
+        left_term = _build_conditional_term(expr_node.get('left'), fields)
+        right_term = _build_conditional_term(expr_node.get('right'), fields)
+        return _compare_terms(op, left_term, right_term)
+
+    return BoolVal(True)
+
+def build_z3_expression_for_conditional(expr_node, fields):
+    return _to_boolref(_build_conditional_term(expr_node, fields))
 
 _path_cache = {}
 def find_path_to_table(pipeline_data, start_node_name, target_table_name, visited_nodes, fields):

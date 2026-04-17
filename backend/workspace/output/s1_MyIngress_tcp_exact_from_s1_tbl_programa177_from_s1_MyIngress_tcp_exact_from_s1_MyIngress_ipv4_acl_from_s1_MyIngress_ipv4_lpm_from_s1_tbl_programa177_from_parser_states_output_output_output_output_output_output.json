@@ -1,0 +1,102 @@
+[
+  {
+    "description": "start [extract ethernet] -> parse_ipv4 [extract ipv4] -> parse_tcp [extract tcp] -> tbl_programa177 -> MyIngress.ipv4_lpm -> MyIngress.ipv4_acl -> MyIngress.tcp_exact -> tbl_programa177 -> MyIngress.tcp_exact",
+    "z3_constraints_smt2": [
+      "(= ethernet.etherType #x0800)",
+      "(= ipv4.protocol #x06)",
+      "(= standard_metadata.$valid$ #b0)",
+      "(= ethernet.$valid$ #b1)",
+      "(= ipv4.$valid$ #b1)",
+      "(= tcp.$valid$ #b1)",
+      "(distinct #b111111111 standard_metadata.egress_spec)",
+      "(let ((a!1 (ite (= ipv4.dstAddr #x0a00010a)\n                #b000000001\n                (ite (= ((_ extract 31 8) ipv4.dstAddr) #x0a0002)\n                     #b000000010\n                     #b111111111))))\n  (distinct #b111111111 a!1))",
+      "(let ((a!1 (ite (= ipv4.dstAddr #x0a00010a)\n                #b000000001\n                (ite (= ((_ extract 31 8) ipv4.dstAddr) #x0a0002)\n                     #b000000010\n                     #b111111111))))\n  (distinct #b111111111 a!1))",
+      "(let ((a!1 (ite (= ipv4.dstAddr #x0a00010a)\n                #b000000001\n                (ite (= ((_ extract 31 8) ipv4.dstAddr) #x0a0002)\n                     #b000000010\n                     #b111111111))))\n  (distinct #b111111111 a!1))",
+      "(let ((a!1 (ite (= ipv4.dstAddr #x0a00010a)\n                #b000000001\n                (ite (= ((_ extract 31 8) ipv4.dstAddr) #x0a0002)\n                     #b000000010\n                     #b111111111))))\n  (distinct #b111111111 a!1))",
+      "(let ((a!1 (ite (= ipv4.dstAddr #x0a00010a)\n                #b000000001\n                (ite (= ((_ extract 31 8) ipv4.dstAddr) #x0a0002)\n                     #b000000010\n                     #b111111111))))\n  (distinct #b111111111 a!1))"
+    ],
+    "present_headers": [
+      "ethernet",
+      "ipv4",
+      "tcp"
+    ],
+    "history": [
+      "Parser",
+      "tbl_programa177",
+      "MyIngress.ipv4_lpm",
+      "MyIngress.ipv4_acl",
+      "MyIngress.tcp_exact",
+      "tbl_programa177",
+      "MyIngress.tcp_exact"
+    ],
+    "field_updates": {
+      "scalars.metadata.is_dropped": "#b0",
+      "scalars.metadata.routing_class": "#x00",
+      "standard_metadata.egress_spec": "(ite (= ipv4.dstAddr #x0a00010a)\n     #b000000001\n     (ite (= ((_ extract 31 8) ipv4.dstAddr) #x0a0002) #b000000010 #b111111111))",
+      "ethernet.dstAddr": "(ite (= ipv4.dstAddr #x0a00010a)\n     #x000000000100\n     (ite (= ((_ extract 31 8) ipv4.dstAddr) #x0a0002)\n          #x00aabbccdd02\n          ethernet.dstAddr))",
+      "ethernet.srcAddr": "(ite (or (= ipv4.dstAddr #x0a00010a)\n         (= ((_ extract 31 8) ipv4.dstAddr) #x0a0002))\n     ethernet.dstAddr\n     ethernet.srcAddr)",
+      "ipv4.ttl": "(ite (or (= ipv4.dstAddr #x0a00010a)\n         (= ((_ extract 31 8) ipv4.dstAddr) #x0a0002))\n     (bvadd #xff ipv4.ttl)\n     ipv4.ttl)",
+      "ipv4.diffserv": "(let ((a!1 (ite (and (= ipv4.srcAddr #x00000000)\n                     (= ((_ extract 31 8) ipv4.dstAddr) #x0a0002))\n                sym__r_class__entry_0_MyIngress_ipv4_acl__MyIngress_set_class__ipv4_diffserv\n                ipv4.diffserv)))\n  (ite (and (= ipv4.srcAddr #x00000000) (= ipv4.dstAddr #x0a00010a))\n       sym__r_class__entry_1_MyIngress_ipv4_acl__MyIngress_set_class__ipv4_diffserv\n       a!1))",
+      "tcp.dstPort": "(ite (and (= tcp.srcPort #x0001) (= tcp.dstPort #x0001))\n     sym__p__entry_1_MyIngress_tcp_exact__MyIngress_modify_port__tcp_dstPort\n     (ite (and (= tcp.srcPort #x0002) (= tcp.dstPort #x0002))\n          sym__p__entry_0_MyIngress_tcp_exact__MyIngress_modify_port__tcp_dstPort\n          tcp.dstPort))"
+    }
+  },
+  {
+    "description": "start [extract ethernet] -> parse_ipv4 [extract ipv4] -> tbl_programa177 -> MyIngress.ipv4_lpm -> MyIngress.ipv4_acl -> tbl_programa177",
+    "z3_constraints_smt2": [
+      "(= ethernet.etherType #x0800)",
+      "(not (= ipv4.protocol #x06))",
+      "(= standard_metadata.$valid$ #b0)",
+      "(= ethernet.$valid$ #b1)",
+      "(= ipv4.$valid$ #b1)",
+      "(= tcp.$valid$ #b0)",
+      "(distinct #b111111111 standard_metadata.egress_spec)",
+      "(let ((a!1 (ite (= ipv4.dstAddr #x0a00010a)\n                #b000000001\n                (ite (= ((_ extract 31 8) ipv4.dstAddr) #x0a0002)\n                     #b000000010\n                     #b111111111))))\n  (distinct #b111111111 a!1))",
+      "(let ((a!1 (ite (= ipv4.dstAddr #x0a00010a)\n                #b000000001\n                (ite (= ((_ extract 31 8) ipv4.dstAddr) #x0a0002)\n                     #b000000010\n                     #b111111111))))\n  (distinct #b111111111 a!1))",
+      "(let ((a!1 (ite (= ipv4.dstAddr #x0a00010a)\n                #b000000001\n                (ite (= ((_ extract 31 8) ipv4.dstAddr) #x0a0002)\n                     #b000000010\n                     #b111111111))))\n  (distinct #b111111111 a!1))"
+    ],
+    "present_headers": [
+      "ethernet",
+      "ipv4"
+    ],
+    "history": [
+      "Parser",
+      "tbl_programa177",
+      "MyIngress.ipv4_lpm",
+      "MyIngress.ipv4_acl",
+      "tbl_programa177"
+    ],
+    "field_updates": {
+      "scalars.metadata.is_dropped": "#b0",
+      "scalars.metadata.routing_class": "#x00",
+      "standard_metadata.egress_spec": "(ite (= ipv4.dstAddr #x0a00010a)\n     #b000000001\n     (ite (= ((_ extract 31 8) ipv4.dstAddr) #x0a0002) #b000000010 #b111111111))",
+      "ethernet.dstAddr": "(ite (= ipv4.dstAddr #x0a00010a)\n     #x000000000100\n     (ite (= ((_ extract 31 8) ipv4.dstAddr) #x0a0002)\n          #x00aabbccdd02\n          ethernet.dstAddr))",
+      "ethernet.srcAddr": "(ite (or (= ipv4.dstAddr #x0a00010a)\n         (= ((_ extract 31 8) ipv4.dstAddr) #x0a0002))\n     ethernet.dstAddr\n     ethernet.srcAddr)",
+      "ipv4.ttl": "(ite (or (= ipv4.dstAddr #x0a00010a)\n         (= ((_ extract 31 8) ipv4.dstAddr) #x0a0002))\n     (bvadd #xff ipv4.ttl)\n     ipv4.ttl)",
+      "ipv4.diffserv": "(let ((a!1 (ite (and (= ipv4.srcAddr #x00000000)\n                     (= ((_ extract 31 8) ipv4.dstAddr) #x0a0002))\n                sym__r_class__entry_0_MyIngress_ipv4_acl__MyIngress_set_class__ipv4_diffserv\n                ipv4.diffserv)))\n  (ite (and (= ipv4.srcAddr #x00000000) (= ipv4.dstAddr #x0a00010a))\n       sym__r_class__entry_1_MyIngress_ipv4_acl__MyIngress_set_class__ipv4_diffserv\n       a!1))"
+    }
+  },
+  {
+    "description": "start [extract ethernet] -> tbl_programa177 -> tbl_programa177",
+    "z3_constraints_smt2": [
+      "(not (= ethernet.etherType #x0800))",
+      "(= standard_metadata.$valid$ #b0)",
+      "(= ethernet.$valid$ #b1)",
+      "(= ipv4.$valid$ #b0)",
+      "(= tcp.$valid$ #b0)",
+      "(distinct #b111111111 standard_metadata.egress_spec)",
+      "(distinct #b111111111 standard_metadata.egress_spec)"
+    ],
+    "present_headers": [
+      "ethernet"
+    ],
+    "history": [
+      "Parser",
+      "tbl_programa177",
+      "tbl_programa177"
+    ],
+    "field_updates": {
+      "scalars.metadata.is_dropped": "#b0",
+      "scalars.metadata.routing_class": "#x00"
+    }
+  }
+]

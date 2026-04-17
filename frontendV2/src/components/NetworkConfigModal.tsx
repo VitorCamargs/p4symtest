@@ -15,6 +15,7 @@ export interface TableEntry {
 
 /** Per-switch config: a map from table name to list of entries. */
 export type SwitchTableConfig = Record<string, TableEntry[]>;
+export type ExecutionMode = 'auto_concrete' | 'full_symbolic';
 
 export interface NetworkConfig {
   numSwitches: number;
@@ -51,9 +52,62 @@ function colsForSchema(schema: TableSchema): string[] {
     if (!isMappableField(k.field)) return;
     matchCols.push(k.field);
     if (k.match_type === 'lpm') matchCols.push(`${k.field}/prefix`);
+    if (k.match_type === 'ternary') matchCols.push(`${k.field}/mask`);
   });
   
   return [...matchCols, 'Action & Parameters'];
+}
+
+function isSymbolicToken(v: string): boolean {
+  const t = v.trim().toLowerCase();
+  return t === '' || t === 'symbolic' || t === 'sym' || t === '__symbolic__' || t === '*' || t === 'auto' || t === 'default';
+}
+
+function isIpv4(v: string): boolean {
+  const m = v.trim().match(/^(\d{1,3})(\.\d{1,3}){3}$/);
+  if (!m) return false;
+  return v.trim().split('.').every((p) => {
+    const n = Number(p);
+    return Number.isFinite(n) && n >= 0 && n <= 255;
+  });
+}
+
+function prefixToIpv4Mask(prefix: number): string {
+  const p = Math.max(0, Math.min(32, Math.trunc(prefix)));
+  const parts: number[] = [];
+  for (let i = 0; i < 4; i++) {
+    const rem = Math.max(0, Math.min(8, p - i * 8));
+    const octet = rem === 0 ? 0 : (0xff << (8 - rem)) & 0xff;
+    parts.push(octet);
+  }
+  return parts.join('.');
+}
+
+function parseIpv4Cidr(v: string): { ip: string; prefix: number } | null {
+  const m = v.trim().match(/^(\d{1,3}(?:\.\d{1,3}){3})\/(\d{1,2})$/);
+  if (!m) return null;
+  const ip = m[1];
+  const prefix = Number(m[2]);
+  if (!isIpv4(ip) || !Number.isFinite(prefix) || prefix < 0 || prefix > 32) return null;
+  return { ip, prefix };
+}
+
+function inferTernaryMask(field: string, value: string): string {
+  const f = field.toLowerCase();
+  const raw = value.trim();
+  if (isSymbolicToken(raw)) return '0.0.0.0';
+
+  const cidr = parseIpv4Cidr(raw);
+  if (cidr) return prefixToIpv4Mask(cidr.prefix);
+
+  if (isIpv4(raw)) {
+    // Common intent for routing-like fields: x.x.x.0 means /24 network.
+    if ((f.includes('dstaddr') || f.includes('dst_addr')) && raw.endsWith('.0')) return '255.255.255.0';
+    return '255.255.255.255';
+  }
+
+  if (f.includes('mac')) return 'ff:ff:ff:ff:ff:ff';
+  return '0xffffffff';
 }
 
 // ── Dynamic row ───────────────────────────────────────────────────────────────
@@ -66,11 +120,34 @@ function EntryRow({
   onChange: (e: TableEntry) => void;
   onRemove: () => void;
 }) {
-  const setMatch = (field: string, val: string) =>
-    onChange({ ...entry, match: { ...entry.match, [field]: val } });
+  const setMatch = (key: TableKey, val: string) => {
+    let normalized = val.trim();
+    const nextMatch = { ...entry.match, [key.field]: normalized };
+    const next: TableEntry = { ...entry, match: nextMatch };
+
+    if (key.match_type === 'ternary') {
+      const cidr = parseIpv4Cidr(normalized);
+      const nextMask = { ...(entry.matchMask ?? {}) };
+
+      if (cidr) {
+        normalized = cidr.ip;
+        next.match[key.field] = normalized;
+        nextMask[key.field] = prefixToIpv4Mask(cidr.prefix);
+      } else if (!nextMask[key.field] || nextMask[key.field].trim() === '') {
+        nextMask[key.field] = inferTernaryMask(key.field, normalized);
+      }
+
+      next.matchMask = nextMask;
+    }
+
+    onChange(next);
+  };
 
   const setPrefix = (field: string, val: number) =>
     onChange({ ...entry, matchPrefix: { ...(entry.matchPrefix ?? {}), [field]: val } });
+
+  const setMask = (field: string, val: string) =>
+    onChange({ ...entry, matchMask: { ...(entry.matchMask ?? {}), [field]: val } });
   
   const setAction = (val: string) => onChange({ ...entry, action: val, action_params: {} });
 
@@ -86,14 +163,24 @@ function EntryRow({
         <Fragment key={k.field}>
           <td style={cellStyle}>
             <input style={inputStyle} value={entry.match[k.field] ?? ''}
-              onChange={e => setMatch(k.field, e.target.value)}
-              placeholder="symbolic" />
+              onChange={e => setMatch(k, e.target.value)}
+              placeholder={k.match_type === 'ternary' ? 'symbolic or 10.0.2.0/24' : 'symbolic'} />
           </td>
           {k.match_type === 'lpm' && (
             <td key={`${k.field}/prefix`} style={{ ...cellStyle, width: '60px' }}>
               <input style={inputStyle} type="number" min={0} max={128}
                 value={entry.matchPrefix?.[k.field] ?? 32}
                 onChange={e => setPrefix(k.field, +e.target.value)} />
+            </td>
+          )}
+          {k.match_type === 'ternary' && (
+            <td key={`${k.field}/mask`} style={{ ...cellStyle, minWidth: '130px' }}>
+              <input
+                style={inputStyle}
+                value={entry.matchMask?.[k.field] ?? ''}
+                onChange={e => setMask(k.field, e.target.value)}
+                placeholder="255.255.255.255"
+              />
             </td>
           )}
 
@@ -184,12 +271,12 @@ function TableSection({
                     const isMatch = schema.keys.some(k => 
                       k.field === c || 
                       `${k.field}/prefix` === c || 
-                      `${k.field} (mask)` === c
+                      `${k.field}/mask` === c
                     );
                     const isAction = c === 'Action & Parameters';
                     const isParam = !isMatch && !isAction;
 
-                    let baseLabel = c.replace(/^.*\./, '').replace('/prefix', ' /len');
+                    let baseLabel = c.replace(/^.*\./, '').replace('/prefix', ' /len').replace('/mask', ' /mask');
                     if (isMatch) baseLabel = `MATCH: ${baseLabel}`;
                     if (isParam) baseLabel = `PARAM: ${baseLabel}`;
                     
@@ -280,6 +367,7 @@ export interface TopologyConfig {
   nodes: TopologyNode[];
   edges: TopologyEdge[];
   switches: Array<{ id: string; tables: SwitchTableConfig }>;
+  executionMode: ExecutionMode;
 }
 
 export function useNetworkConfig(tableSchemas: TableSchema[] = []) {
@@ -287,6 +375,7 @@ export function useNetworkConfig(tableSchemas: TableSchema[] = []) {
     nodes: defaultNodes,
     edges: defaultEdges,
     switches: autoPopulateTables(defaultNodes, defaultEdges, [], tableSchemas),
+    executionMode: 'auto_concrete',
   }));
 
   // Re-populate when schemas arrive (e.g. after compiling a P4 file)
@@ -314,6 +403,9 @@ export default function NetworkConfigModal({
   onClose: () => void;
   tableSchemas: TableSchema[];
 }) {
+  const setExecutionMode = (mode: ExecutionMode) =>
+    setConfig({ ...config, executionMode: mode });
+
   const updateSwitch = (i: number, sw: { id: string; tables: SwitchTableConfig }) =>
     setConfig({ ...config, switches: config.switches.map((s, idx) => idx === i ? sw : s) });
 
@@ -363,10 +455,28 @@ export default function NetworkConfigModal({
         </div>
 
         {/* Summary bar */}
-        <div style={{ padding: '0.6rem 1.5rem', background: 'var(--bg-surface)', borderBottom: '1px solid var(--border)', display: 'flex', gap: '1.5rem', fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+        <div style={{ padding: '0.6rem 1.5rem', background: 'var(--bg-surface)', borderBottom: '1px solid var(--border)', display: 'flex', gap: '1.5rem', fontSize: '0.78rem', color: 'var(--text-muted)', alignItems: 'center', flexWrap: 'wrap' }}>
           <span><strong style={{ color: 'var(--accent)' }}>{config.switches.length}</strong> switches</span>
           <span><strong style={{ color: 'var(--accent)' }}>{tableSchemas.filter(s => s.keys.length > 0).length}</strong> configurable tables</span>
           <span><strong style={{ color: 'var(--accent)' }}>{totalEntries}</strong> total entries</span>
+          <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>Execution Mode</span>
+            <select
+              value={config.executionMode}
+              onChange={(e) => setExecutionMode(e.target.value as ExecutionMode)}
+              style={{
+                background: 'var(--bg-dark)',
+                border: '1px solid var(--border)',
+                color: 'var(--text-main)',
+                borderRadius: '4px',
+                padding: '0.2rem 0.5rem',
+                fontSize: '0.75rem',
+              }}
+            >
+              <option value="auto_concrete">Auto Concrete (default)</option>
+              <option value="full_symbolic">Full Symbolic</option>
+            </select>
+          </div>
         </div>
 
         {/* Body */}
