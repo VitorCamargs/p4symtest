@@ -3,3 +3,6 @@ flask-cors==4.0.0
 z3-solver==4.12.2.0
 networkx==3.1
 pydot==1.4.2
+numpy==1.24.4
+pandas==2.0.3
+matplotlib==3.7.5

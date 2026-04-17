@@ -1,6 +1,8 @@
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
+import argparse
+import subprocess
 import sys
 import re
 from pathlib import Path
@@ -10,6 +12,41 @@ import matplotlib.patches as mpatches
 INPUT_NORMAL = "normal.csv"
 INPUT_OTIMIZADO = "otimizado.csv"
 OUTPUT_DIR = Path(".") # Salva no diretório atual
+DEFAULT_OUTPUT_PDF = "grafico3.pdf"
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Gera gráfico do benchmark exaustivo.")
+    parser.add_argument(
+        "--output-pdf",
+        default=DEFAULT_OUTPUT_PDF,
+        help=f"Nome/caminho do PDF de saída (default: {DEFAULT_OUTPUT_PDF})",
+    )
+    parser.add_argument(
+        "--open",
+        action="store_true",
+        help="Tenta abrir automaticamente o PDF após salvar.",
+    )
+    return parser.parse_args()
+
+
+def try_open_file(path: Path) -> None:
+    try:
+        if sys.platform == "darwin":
+            subprocess.run(["open", str(path)], check=False)
+        elif sys.platform.startswith("linux"):
+            subprocess.run(["xdg-open", str(path)], check=False)
+        elif sys.platform.startswith("win"):
+            import os
+
+            os.startfile(str(path))  # type: ignore[attr-defined]
+        else:
+            print(f"Aviso: plataforma sem suporte para auto-open ({sys.platform}).")
+    except Exception as e:
+        print(f"Aviso: não foi possível abrir o PDF automaticamente: {e}")
+
+
+args = parse_args()
 
 # --- 1. Função Helper de Processamento ---
 def process_csv_data(csv_file):
@@ -221,10 +258,17 @@ if df_agg_normal is not None and df_agg_otimizado is not None:
 
     # --- 3.8 Mostrar o Gráfico ---
     try:
-        print("Abrindo visualização interativa... (Feche a janela para continuar)")
+        print("Abrindo visualização interativa... ajuste zoom/pan e feche a janela para salvar o PDF.")
         plt.show()
     except Exception as e:
         print(f"Erro ao tentar mostrar o gráfico: {e}")
+
+    output_pdf = Path(args.output_pdf).resolve()
+    fig.savefig(output_pdf, format="pdf", bbox_inches="tight")
+    print(f"PDF salvo em: {output_pdf}")
+
+    if args.open:
+        try_open_file(output_pdf)
 
 else:
     print("Um ou ambos os arquivos CSV não puderam ser processados. Gráfico não gerado.")

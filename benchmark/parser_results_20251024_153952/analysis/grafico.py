@@ -1,12 +1,47 @@
 import pandas as pd
 import matplotlib.pyplot as plt
+import argparse
+import subprocess
 import sys
 from pathlib import Path
 
 # --- Configuração ---
 INPUT_CSV = "parser_summary_raw.csv"
+DEFAULT_OUTPUT_PDF = "grafico1.pdf"
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Gera gráfico do benchmark de parser.")
+    parser.add_argument(
+        "--output-pdf",
+        default=DEFAULT_OUTPUT_PDF,
+        help=f"Nome/caminho do PDF de saída (default: {DEFAULT_OUTPUT_PDF})",
+    )
+    parser.add_argument(
+        "--open",
+        action="store_true",
+        help="Tenta abrir automaticamente o PDF após salvar.",
+    )
+    return parser.parse_args()
+
+
+def try_open_file(path: Path) -> None:
+    try:
+        if sys.platform == "darwin":
+            subprocess.run(["open", str(path)], check=False)
+        elif sys.platform.startswith("linux"):
+            subprocess.run(["xdg-open", str(path)], check=False)
+        elif sys.platform.startswith("win"):
+            import os
+
+            os.startfile(str(path))  # type: ignore[attr-defined]
+        else:
+            print(f"Aviso: plataforma sem suporte para auto-open ({sys.platform}).")
+    except Exception as e:
+        print(f"Aviso: não foi possível abrir o PDF automaticamente: {e}")
 
 def main():
+    args = parse_args()
     # --- 1. Carregar e Processar Dados ---
     print(f"--- Processando arquivo: {INPUT_CSV} ---")
     try:
@@ -86,11 +121,18 @@ def main():
 
     # --- 5. Mostrar o Gráfico ---
     try:
-        print("Abrindo visualização interativa... (Feche a janela para continuar)")
+        print("Abrindo visualização interativa... ajuste zoom/pan e feche a janela para salvar o PDF.")
         plt.rcParams.update({'font.size': 20})
         plt.show()
     except Exception as e:
         print(f"Erro ao tentar mostrar o gráfico: {e}")
+
+    output_pdf = Path(args.output_pdf).resolve()
+    fig.savefig(output_pdf, format="pdf", bbox_inches="tight")
+    print(f"PDF salvo em: {output_pdf}")
+
+    if args.open:
+        try_open_file(output_pdf)
 
 if __name__ == "__main__":
     main()

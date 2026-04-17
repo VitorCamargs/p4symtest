@@ -142,23 +142,55 @@ Utility scripts to measure structural path behavior:
 - **Combined Analyzer** (`python3 combined_analyzer.py <fsm.json> <parser_states_output.json>`): Compares logical parser snapshots against the pipeline structural layout, aggressively pruning contradictions initially generated upstream.
 
 #### 2. Running Benchmarks
-The framework includes robust synthetic P4 program generators and orchestration scripts integrated inside the `benchmark/` folder. Executing these metrics is the primary driver for prioritizing CLI operation.
+Benchmark execution is unified into an interactive terminal workflow that runs inside the backend container.
 
-```powershell
-# Navigate to the benchmark folder
-cd benchmark/
-
-# Run the Parser validation logic benchmark scale (Evaluates states explosion)
-pwsh run_parser_benchmark.ps1
-
-# Run the Ingress Tables benchmark testing (Identifies performance under scale)
-pwsh run_ingress_benchmark.ps1
-
-# Run the Exhaustive Test mapping end-to-end table combinatorials over time
-pwsh run_exhaustive_test.ps1
-
-# Output logs and timestamped graph plotting results will be captured and output into automatically generated benchmark/ folders.
+1. Start the backend container:
+```bash
+docker compose up -d backend
 ```
+
+If port `5000` is busy on your machine, start with a different host port:
+```bash
+BACKEND_HOST_PORT=5500 docker compose up -d backend
+```
+
+2. From the repository root (local machine), start the benchmark CLI:
+```bash
+./run benchmark
+```
+
+This command opens an interactive menu (executed in `p4symtest-backend`) with:
+- `1) Benchmark Parser`
+- `2) Benchmark Ingress/Egress Tables`
+- `3) Benchmark Deparser`
+- `4) Benchmark Full Pipeline (Non-Optimized)`
+- `5) Benchmark Full Pipeline (Optimized)`
+
+3. After each benchmark run, the CLI prints the generated file locations and opens a post-run menu:
+- `1) Generate graph`
+- `2) Back to main menu`
+- `0) Exit`
+
+Graph generation uses the benchmark CSV of that run and saves a PDF in the same run directory.  
+By default, the generated filename pattern is `graph_<mode>.pdf`.
+When `--open` is selected, the host wrapper (`./run benchmark`) requests the host OS to open the PDF automatically.
+
+4. Output location:
+```text
+backend/workspace/benchmark_runs/<mode>_<timestamp>/
+```
+
+Examples of `<mode>`:
+- `parser`
+- `tables`
+- `deparser`
+- `full`
+- `full_optimized`
+
+Notes:
+- Option `4` is the full pipeline baseline (non-optimized).
+- Option `5` enables the optimized full pipeline flow (table cache + deparser-state optimization/expansion).
+- If you execute the menu directly inside the container (`docker exec ... /app/run benchmark`), benchmarks still run normally, but automatic PDF opening on the host is not guaranteed. Use `./run benchmark` on the host for full auto-open behavior.
 
 ---
 

@@ -1,0 +1,30 @@
+#!/usr/bin/env sh
+set -eu
+
+usage() {
+  cat <<'EOF'
+Usage:
+  ./run benchmark
+EOF
+}
+
+if [ "$#" -lt 1 ]; then
+  usage
+  exit 1
+fi
+
+COMMAND="$1"
+shift || true
+
+if [ "$COMMAND" != "benchmark" ]; then
+  usage
+  exit 1
+fi
+
+if [ ! -f /app/benchmark_cli/run_benchmark_menu.py ]; then
+  echo "Error: /app/benchmark_cli/run_benchmark_menu.py not found."
+  echo "Ensure the backend/benchmark_cli directory exists on the host."
+  exit 1
+fi
+
+exec python3 /app/benchmark_cli/run_benchmark_menu.py

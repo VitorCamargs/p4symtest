@@ -1,0 +1,1050 @@
+#!/usr/bin/env python3
+"""
+Unified interactive menu for P4SymTest benchmarks.
+
+This script should run inside the backend container (p4symtest-backend).
+Results are saved in /app/workspace/benchmark_runs.
+"""
+
+from __future__ import annotations
+
+import csv
+import json
+import os
+import subprocess
+import sys
+import time
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Sequence, Tuple
+
+from synthetic_p4_generator import SyntheticP4Generator
+
+
+WORKSPACE_DIR = Path("/app/workspace")
+RUN_SCRIPTS_DIR = WORKSPACE_DIR
+OUTPUT_ROOT = WORKSPACE_DIR / "benchmark_runs"
+CLI_DIR = Path(__file__).resolve().parent
+P4C_BIN = Path("/usr/local/bin/p4c")
+SWITCH_ID = "s1"
+
+RUN_PARSER = RUN_SCRIPTS_DIR / "run_parser.py"
+RUN_TABLE = RUN_SCRIPTS_DIR / "run_table.py"
+RUN_TABLE_EGRESS = RUN_SCRIPTS_DIR / "run_table_egress.py"
+RUN_DEPARSER = RUN_SCRIPTS_DIR / "run_deparser.py"
+RUN_TABLE_WITH_CACHE = RUN_SCRIPTS_DIR / "run_table_with_cache.py"
+
+BENCH_EXHAUSTIVE_DIR = Path("/app/benchmark_exhaustive")
+DEPARSE_OPTIMIZER_MODULE = BENCH_EXHAUSTIVE_DIR / "deparser_optimizer.py"
+TABLE_CACHE_MODULE = BENCH_EXHAUSTIVE_DIR / "table_execution_cache.py"
+
+PLOT_PARSER = CLI_DIR / "plot_parser_graph.py"
+PLOT_TABLES = CLI_DIR / "plot_tables_graph.py"
+PLOT_DEPARSER = CLI_DIR / "plot_deparser_graph.py"
+PLOT_FULL = CLI_DIR / "plot_full_graph.py"
+
+
+def now_tag() -> str:
+    return datetime.now().strftime("%Y%m%d_%H%M%S")
+
+
+def build_range(start: int, end: int, step: int) -> List[int]:
+    if step <= 0:
+        raise ValueError("step must be > 0")
+    if end < start:
+        raise ValueError("end must be >= start")
+    return list(range(start, end + 1, step))
+
+
+def ask_int(prompt: str, default: int, minimum: int = 1) -> int:
+    while True:
+        raw = input(f"{prompt} [{default}]: ").strip()
+        if not raw:
+            return default
+        try:
+            value = int(raw)
+            if value < minimum:
+                print(f"  Invalid value: must be >= {minimum}.")
+                continue
+            return value
+        except ValueError:
+            print("  Invalid value: enter an integer.")
+
+
+def ask_choice(prompt: str, options: Dict[str, str], default: str) -> str:
+    labels = " | ".join([f"{key}={label}" for key, label in options.items()])
+    while True:
+        raw = input(f"{prompt} ({labels}) [{default}]: ").strip()
+        if not raw:
+            raw = default
+        if raw in options:
+            return raw
+        print("  Invalid option.")
+
+
+def ensure_required_paths() -> None:
+    missing = [p for p in [P4C_BIN, RUN_PARSER, RUN_TABLE, RUN_TABLE_EGRESS, RUN_DEPARSER] if not p.exists()]
+    if missing:
+        print("Error: required scripts/dependencies were not found in the container:")
+        for item in missing:
+            print(f"  - {item}")
+        sys.exit(1)
+
+
+def run_command(cmd: Sequence[str], cwd: Path | None = None, timeout: int = 1800) -> Tuple[bool, float, str]:
+    return run_command_with_heartbeat(cmd=cmd, cwd=cwd, timeout=timeout, heartbeat_label=None)
+
+
+def run_command_with_heartbeat(
+    cmd: Sequence[str],
+    cwd: Path | None = None,
+    timeout: int = 1800,
+    heartbeat_label: str | None = None,
+    heartbeat_interval_s: int = 20,
+    env: Dict[str, str] | None = None,
+) -> Tuple[bool, float, str]:
+    start = time.time()
+    try:
+        proc = subprocess.Popen(
+            list(cmd),
+            cwd=str(cwd) if cwd else None,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            env=env,
+        )
+    except Exception as exc:  # pragma: no cover
+        return False, time.time() - start, f"Exception: {exc}"
+
+    try:
+        while True:
+            elapsed = time.time() - start
+            remaining = timeout - elapsed
+            if remaining <= 0:
+                proc.kill()
+                proc.communicate()
+                return False, time.time() - start, f"Timeout after {timeout}s"
+
+            wait_timeout = min(max(1, heartbeat_interval_s), remaining) if heartbeat_label else remaining
+
+            try:
+                out, err = proc.communicate(timeout=wait_timeout)
+                duration = time.time() - start
+                ok = proc.returncode == 0
+                err_text = (err or "").strip()
+                out_text = (out or "").strip()
+                if ok:
+                    return True, duration, ""
+                return False, duration, (err_text if err_text else out_text)[:1200]
+            except subprocess.TimeoutExpired:
+                if heartbeat_label:
+                    print(f"      ... {heartbeat_label} still running ({time.time() - start:.1f}s)")
+                continue
+    except Exception as exc:  # pragma: no cover
+        try:
+            proc.kill()
+            proc.communicate()
+        except Exception:
+            pass
+        return False, time.time() - start, f"Exception: {exc}"
+
+
+def json_list_size(path: Path) -> int:
+    if not path.exists():
+        return 0
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+        return len(data) if isinstance(data, list) else 0
+    except Exception:
+        return 0
+
+
+def write_csv(rows: List[Dict], output_file: Path) -> None:
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    if not rows:
+        with output_file.open("w", encoding="utf-8", newline="") as f:
+            f.write("")
+        return
+
+    # Field order based on first row; append any late keys at the end.
+    ordered_fields = list(rows[0].keys())
+    all_fields = set(ordered_fields)
+    for row in rows[1:]:
+        for key in row.keys():
+            if key not in all_fields:
+                ordered_fields.append(key)
+                all_fields.add(key)
+
+    with output_file.open("w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=ordered_fields)
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def write_summary(rows: List[Dict], output_file: Path) -> None:
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    total = len(rows)
+    success = sum(1 for row in rows if row.get("success"))
+    failed = total - success
+    avg_duration = sum(float(row.get("duration_s", 0.0)) for row in rows) / total if total else 0.0
+    summary = {
+        "total_runs": total,
+        "success_runs": success,
+        "failed_runs": failed,
+        "avg_duration_s": round(avg_duration, 6),
+    }
+    with output_file.open("w", encoding="utf-8") as f:
+        json.dump(summary, f, indent=2)
+
+
+class BenchmarkMenuRunner:
+    def __init__(self) -> None:
+        ensure_required_paths()
+        OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
+        self.generator = SyntheticP4Generator(seed=42)
+        self._optimized_helpers_checked = False
+        self._optimized_helpers_available = False
+        self._optimize_and_process_deparser: Callable[[List[Dict], Path, int], Tuple[Path, Dict[str, Any]]] | None = None
+        self._expand_deparser_results: Callable[[Path, Dict[str, Any], Path, int], Path] | None = None
+
+    def _load_optimized_helpers(self) -> bool:
+        if self._optimized_helpers_checked:
+            return self._optimized_helpers_available
+
+        self._optimized_helpers_checked = True
+
+        if not RUN_TABLE_WITH_CACHE.exists():
+            print(f"[WARN] Optimized mode unavailable: script not found: {RUN_TABLE_WITH_CACHE}")
+            return False
+        if not DEPARSE_OPTIMIZER_MODULE.exists():
+            print(f"[WARN] Optimized mode unavailable: module not found: {DEPARSE_OPTIMIZER_MODULE}")
+            return False
+        if not TABLE_CACHE_MODULE.exists():
+            print(f"[WARN] Optimized mode unavailable: module not found: {TABLE_CACHE_MODULE}")
+            return False
+
+        if str(BENCH_EXHAUSTIVE_DIR) not in sys.path:
+            sys.path.append(str(BENCH_EXHAUSTIVE_DIR))
+
+        try:
+            from deparser_optimizer import expand_deparser_results, optimize_and_process_deparser
+
+            self._optimize_and_process_deparser = optimize_and_process_deparser
+            self._expand_deparser_results = expand_deparser_results
+            self._optimized_helpers_available = True
+            return True
+        except Exception as exc:
+            print(f"[WARN] Could not load optimized-mode helpers: {exc}")
+            return False
+
+    def _optimized_env(self) -> Dict[str, str]:
+        env = os.environ.copy()
+        existing = env.get("PYTHONPATH", "")
+        extra = str(BENCH_EXHAUSTIVE_DIR)
+        if existing:
+            env["PYTHONPATH"] = f"{extra}:{existing}"
+        else:
+            env["PYTHONPATH"] = extra
+        return env
+
+    def _compile(self, p4_file: Path, build_dir: Path) -> Tuple[bool, float, str, Path]:
+        build_dir.mkdir(parents=True, exist_ok=True)
+        cmd = [str(P4C_BIN), "--target", "bmv2", "--arch", "v1model", "-o", str(build_dir), str(p4_file)]
+        ok, duration, err = run_command(cmd, cwd=p4_file.parent, timeout=1800)
+        fsm_file = build_dir / f"{p4_file.stem}.json"
+        if ok and not fsm_file.exists():
+            return False, duration, f"FSM output not found: {fsm_file}", fsm_file
+        return ok, duration, err, fsm_file
+
+    def _run_parser(
+        self, fsm_file: Path, output_file: Path, heartbeat_label: str | None = None
+    ) -> Tuple[bool, float, str]:
+        cmd = ["python3", str(RUN_PARSER), str(fsm_file), str(output_file)]
+        return run_command_with_heartbeat(cmd, cwd=RUN_SCRIPTS_DIR, timeout=1800, heartbeat_label=heartbeat_label)
+
+    def _run_ingress_table(
+        self,
+        fsm_file: Path,
+        topology_file: Path,
+        runtime_file: Path,
+        input_states: Path,
+        table_name: str,
+        output_file: Path,
+        heartbeat_label: str | None = None,
+    ) -> Tuple[bool, float, str]:
+        cmd = [
+            "python3",
+            str(RUN_TABLE),
+            str(fsm_file),
+            str(topology_file),
+            str(runtime_file),
+            str(input_states),
+            SWITCH_ID,
+            table_name,
+            str(output_file),
+        ]
+        return run_command_with_heartbeat(cmd, cwd=RUN_SCRIPTS_DIR, timeout=1800, heartbeat_label=heartbeat_label)
+
+    def _run_ingress_table_cached(
+        self,
+        fsm_file: Path,
+        topology_file: Path,
+        runtime_file: Path,
+        input_states: Path,
+        table_name: str,
+        output_file: Path,
+        cache_file: Path,
+        heartbeat_label: str | None = None,
+    ) -> Tuple[bool, float, str]:
+        cmd = [
+            "python3",
+            str(RUN_TABLE_WITH_CACHE),
+            str(fsm_file),
+            str(topology_file),
+            str(runtime_file),
+            str(input_states),
+            SWITCH_ID,
+            table_name,
+            str(output_file),
+            str(cache_file),
+        ]
+        return run_command_with_heartbeat(
+            cmd,
+            cwd=RUN_SCRIPTS_DIR,
+            timeout=1800,
+            heartbeat_label=heartbeat_label,
+            env=self._optimized_env(),
+        )
+
+    def _run_egress_table(
+        self,
+        fsm_file: Path,
+        runtime_file: Path,
+        input_states: Path,
+        table_name: str,
+        output_file: Path,
+        heartbeat_label: str | None = None,
+    ) -> Tuple[bool, float, str]:
+        cmd = [
+            "python3",
+            str(RUN_TABLE_EGRESS),
+            str(fsm_file),
+            str(runtime_file),
+            str(input_states),
+            SWITCH_ID,
+            table_name,
+            str(output_file),
+        ]
+        return run_command_with_heartbeat(cmd, cwd=RUN_SCRIPTS_DIR, timeout=1800, heartbeat_label=heartbeat_label)
+
+    def _run_deparser(
+        self, fsm_file: Path, input_states: Path, output_file: Path, heartbeat_label: str | None = None
+    ) -> Tuple[bool, float, str]:
+        cmd = ["python3", str(RUN_DEPARSER), str(fsm_file), str(input_states), str(output_file)]
+        return run_command_with_heartbeat(cmd, cwd=RUN_SCRIPTS_DIR, timeout=1800, heartbeat_label=heartbeat_label)
+
+    def _new_run_dirs(self, mode: str) -> Tuple[Path, Path]:
+        run_dir = OUTPUT_ROOT / f"{mode}_{now_tag()}"
+        gen_dir = run_dir / "synthetic_p4s"
+        gen_dir.mkdir(parents=True, exist_ok=True)
+        return run_dir, gen_dir
+
+    def _run_graph_script(self, script: Path, csv_file: Path, output_pdf: Path, open_pdf: bool) -> bool:
+        if not script.exists():
+            print(f"Error: graph script not found: {script}")
+            return False
+        if not csv_file.exists():
+            print(f"Error: CSV not found: {csv_file}")
+            return False
+
+        cmd = [
+            "python3",
+            str(script),
+            "--csv",
+            str(csv_file),
+            "--output-pdf",
+            str(output_pdf),
+        ]
+        if open_pdf:
+            cmd.append("--open")
+
+        env = os.environ.copy()
+        env.setdefault("P4SYMTEST_OPEN_REQUEST_FILE", "/app/workspace/.benchmark_open_requests")
+
+        print(f"\nRunning graph with: {' '.join(cmd)}")
+        proc = subprocess.run(cmd, cwd=str(script.parent), env=env)
+        if proc.returncode != 0:
+            print(f"Failed to generate graph (exit={proc.returncode}).")
+            return False
+        return True
+
+    def _post_benchmark_menu(self, mode: str, run_dir: Path, csv_file: Path) -> bool:
+        script_map = {
+            "parser": PLOT_PARSER,
+            "tables": PLOT_TABLES,
+            "deparser": PLOT_DEPARSER,
+            "full": PLOT_FULL,
+            "full_optimized": PLOT_FULL,
+        }
+        script = script_map.get(mode)
+        if script is None:
+            return True
+
+        output_pdf = run_dir / f"graph_{mode}.pdf"
+
+        while True:
+            print("Options:")
+            print("1) Generate graph")
+            print("2) Back to main menu")
+            print("0) Exit")
+            choice = input("Choose an option: ").strip()
+
+            if choice == "1":
+                open_choice = ask_choice("Open PDF automatically", {"1": "Yes", "2": "No"}, "1")
+                open_pdf = open_choice == "1"
+                ok = self._run_graph_script(script, csv_file, output_pdf, open_pdf)
+                if ok:
+                    print(f"Graph saved to: {output_pdf.resolve()}")
+                continue
+
+            if choice == "2":
+                return True
+
+            if choice == "0":
+                return False
+
+            print("Invalid option.")
+
+    def benchmark_parser(self) -> bool:
+        print("\n=== Benchmark: Parser ===")
+        runs = ask_int("Runs per configuration", 10, 1)
+        parser_start = ask_int("Parser states (start)", 3, 1)
+        parser_max = ask_int("Parser states (max)", 30, parser_start)
+        parser_step = ask_int("Parser states (step)", 3, 1)
+        headers_per_state = ask_int("Headers per state", 2, 1)
+
+        parser_values = build_range(parser_start, parser_max, parser_step)
+        run_dir, gen_dir = self._new_run_dirs("parser")
+        rows: List[Dict] = []
+
+        print(f"\nGenerating/running {len(parser_values)} configurations...")
+        for parser_states in parser_values:
+            meta = self.generator.generate_program(
+                parser_states=parser_states,
+                headers_per_state=headers_per_state,
+                ingress_tables=1,
+                egress_tables=1,
+                actions_per_table=1,
+                output_dir=gen_dir,
+            )
+
+            p4_file = Path(meta["p4_file"])
+            build_dir = gen_dir / f"{meta['id']}_build"
+            compile_ok, compile_time, compile_err, fsm_file = self._compile(p4_file, build_dir)
+
+            if not compile_ok:
+                rows.append(
+                    {
+                        "benchmark": "parser",
+                        "config_id": meta["id"],
+                        "parser_states": parser_states,
+                        "run_number": 0,
+                        "success": False,
+                        "duration_s": round(compile_time, 6),
+                        "output_states": 0,
+                        "error": f"compile: {compile_err}",
+                    }
+                )
+                print(f"  [X] {meta['id']} compile failed")
+                continue
+
+            print(f"  [OK] {meta['id']} compiled. Running parser ({runs}x)...")
+            for run_number in range(1, runs + 1):
+                parser_out = build_dir / f"parser_states_run{run_number}.json"
+                ok, duration, err = self._run_parser(fsm_file, parser_out)
+                rows.append(
+                    {
+                        "benchmark": "parser",
+                        "config_id": meta["id"],
+                        "parser_states": parser_states,
+                        "run_number": run_number,
+                        "success": ok,
+                        "duration_s": round(duration, 6),
+                        "compile_time_s": round(compile_time, 6) if run_number == 1 else 0.0,
+                        "output_states": json_list_size(parser_out),
+                        "error": err if not ok else "",
+                    }
+                )
+
+        csv_file = run_dir / "parser_raw.csv"
+        summary_file = run_dir / "summary.json"
+        write_csv(rows, csv_file)
+        write_summary(rows, summary_file)
+        print(f"\nParser benchmark completed.\n  - CSV: {csv_file}\n  - Summary: {summary_file}\n")
+        return self._post_benchmark_menu("parser", run_dir, csv_file)
+
+    def benchmark_tables(self) -> bool:
+        print("\n=== Benchmark: Ingress/Egress Tables ===")
+        pipeline_choice = ask_choice(
+            "Pipeline",
+            {"1": "Ingress", "2": "Egress", "3": "Ingress + Egress"},
+            "3",
+        )
+        if pipeline_choice == "1":
+            pipelines = ["ingress"]
+        elif pipeline_choice == "2":
+            pipelines = ["egress"]
+        else:
+            pipelines = ["ingress", "egress"]
+
+        runs = ask_int("Runs per configuration", 10, 1)
+        parser_start = ask_int("Parser states (start)", 3, 1)
+        parser_max = ask_int("Parser states (max)", 30, parser_start)
+        parser_step = ask_int("Parser states (step)", 3, 1)
+        actions_start = ask_int("Actions per table (start)", 2, 1)
+        actions_max = ask_int("Actions per table (max)", 15, actions_start)
+        actions_step = ask_int("Actions per table (step)", 3, 1)
+        headers_per_state = ask_int("Headers per state", 1, 1)
+
+        parser_values = build_range(parser_start, parser_max, parser_step)
+        action_values = build_range(actions_start, actions_max, actions_step)
+        run_dir, gen_dir = self._new_run_dirs("tables")
+        rows: List[Dict] = []
+
+        total_cfg = len(pipelines) * len(parser_values) * len(action_values)
+        cfg_idx = 0
+        for pipeline in pipelines:
+            for parser_states in parser_values:
+                for actions in action_values:
+                    cfg_idx += 1
+                    ingress_tables = 1 if pipeline == "ingress" else 0
+                    egress_tables = 1 if pipeline == "egress" else 0
+
+                    meta = self.generator.generate_program(
+                        parser_states=parser_states,
+                        headers_per_state=headers_per_state,
+                        ingress_tables=ingress_tables,
+                        egress_tables=egress_tables,
+                        actions_per_table=actions,
+                        output_dir=gen_dir,
+                    )
+
+                    print(
+                        f"  [{cfg_idx}/{total_cfg}] {pipeline.upper()} "
+                        f"states={parser_states} actions={actions}"
+                    )
+                    p4_file = Path(meta["p4_file"])
+                    topology_file = Path(meta["topology_file"])
+                    runtime_file = Path(meta["runtime_file"])
+                    build_dir = gen_dir / f"{meta['id']}_{pipeline}_build"
+                    compile_ok, compile_time, compile_err, fsm_file = self._compile(p4_file, build_dir)
+
+                    if not compile_ok:
+                        rows.append(
+                            {
+                                "benchmark": "tables",
+                                "pipeline": pipeline,
+                                "config_id": meta["id"],
+                                "parser_states": parser_states,
+                                "actions_per_table": actions,
+                                "run_number": 0,
+                                "success": False,
+                                "duration_s": round(compile_time, 6),
+                                "parser_output_states": 0,
+                                "table_output_states": 0,
+                                "error": f"compile: {compile_err}",
+                            }
+                        )
+                        continue
+
+                    parser_out = build_dir / "parser_states.json"
+                    parser_ok, parser_time, parser_err = self._run_parser(fsm_file, parser_out)
+                    parser_states_out = json_list_size(parser_out)
+                    if not parser_ok or parser_states_out == 0:
+                        rows.append(
+                            {
+                                "benchmark": "tables",
+                                "pipeline": pipeline,
+                                "config_id": meta["id"],
+                                "parser_states": parser_states,
+                                "actions_per_table": actions,
+                                "run_number": 0,
+                                "success": False,
+                                "duration_s": round(parser_time, 6),
+                                "parser_output_states": parser_states_out,
+                                "table_output_states": 0,
+                                "error": f"parser: {parser_err}" if parser_err else "parser output empty",
+                            }
+                        )
+                        continue
+
+                    for run_number in range(1, runs + 1):
+                        table_out = build_dir / f"{pipeline}_table_run{run_number}.json"
+                        if pipeline == "ingress":
+                            ok, duration, err = self._run_ingress_table(
+                                fsm_file=fsm_file,
+                                topology_file=topology_file,
+                                runtime_file=runtime_file,
+                                input_states=parser_out,
+                                table_name="MyIngress.ingress_table_0",
+                                output_file=table_out,
+                            )
+                        else:
+                            ok, duration, err = self._run_egress_table(
+                                fsm_file=fsm_file,
+                                runtime_file=runtime_file,
+                                input_states=parser_out,
+                                table_name="MyEgress.egress_table_0",
+                                output_file=table_out,
+                            )
+
+                        rows.append(
+                            {
+                                "benchmark": "tables",
+                                "pipeline": pipeline,
+                                "config_id": meta["id"],
+                                "parser_states": parser_states,
+                                "actions_per_table": actions,
+                                "run_number": run_number,
+                                "success": ok,
+                                "duration_s": round(duration, 6),
+                                "compile_time_s": round(compile_time, 6) if run_number == 1 else 0.0,
+                                "parser_time_s": round(parser_time, 6) if run_number == 1 else 0.0,
+                                "parser_output_states": parser_states_out,
+                                "table_output_states": json_list_size(table_out),
+                                "error": err if not ok else "",
+                            }
+                        )
+
+        csv_file = run_dir / "tables_raw.csv"
+        summary_file = run_dir / "summary.json"
+        write_csv(rows, csv_file)
+        write_summary(rows, summary_file)
+        print(f"\nTable benchmark completed.\n  - CSV: {csv_file}\n  - Summary: {summary_file}\n")
+        return self._post_benchmark_menu("tables", run_dir, csv_file)
+
+    def benchmark_deparser(self) -> bool:
+        print("\n=== Benchmark: Deparser ===")
+        runs = ask_int("Runs per configuration", 10, 1)
+        parser_start = ask_int("Parser states (start)", 3, 1)
+        parser_max = ask_int("Parser states (max)", 30, parser_start)
+        parser_step = ask_int("Parser states (step)", 3, 1)
+        headers_per_state = ask_int("Headers per state", 1, 1)
+
+        parser_values = build_range(parser_start, parser_max, parser_step)
+        run_dir, gen_dir = self._new_run_dirs("deparser")
+        rows: List[Dict] = []
+
+        print(f"\nGenerating/running {len(parser_values)} configurations...")
+        for parser_states in parser_values:
+            meta = self.generator.generate_program(
+                parser_states=parser_states,
+                headers_per_state=headers_per_state,
+                ingress_tables=1,
+                egress_tables=1,
+                actions_per_table=2,
+                output_dir=gen_dir,
+            )
+
+            p4_file = Path(meta["p4_file"])
+            build_dir = gen_dir / f"{meta['id']}_build"
+            compile_ok, compile_time, compile_err, fsm_file = self._compile(p4_file, build_dir)
+            if not compile_ok:
+                rows.append(
+                    {
+                        "benchmark": "deparser",
+                        "config_id": meta["id"],
+                        "parser_states": parser_states,
+                        "run_number": 0,
+                        "success": False,
+                        "duration_s": round(compile_time, 6),
+                        "input_states": 0,
+                        "output_states": 0,
+                        "error": f"compile: {compile_err}",
+                    }
+                )
+                continue
+
+            parser_out = build_dir / "parser_states.json"
+            parser_ok, parser_time, parser_err = self._run_parser(fsm_file, parser_out)
+            parser_states_out = json_list_size(parser_out)
+            if not parser_ok or parser_states_out == 0:
+                rows.append(
+                    {
+                        "benchmark": "deparser",
+                        "config_id": meta["id"],
+                        "parser_states": parser_states,
+                        "run_number": 0,
+                        "success": False,
+                        "duration_s": round(parser_time, 6),
+                        "input_states": parser_states_out,
+                        "output_states": 0,
+                        "error": f"parser: {parser_err}" if parser_err else "parser output empty",
+                    }
+                )
+                continue
+
+            print(f"  [OK] {meta['id']} parser={parser_states_out} states. Running deparser ({runs}x)...")
+            for run_number in range(1, runs + 1):
+                deparser_out = build_dir / f"deparser_run{run_number}.json"
+                ok, duration, err = self._run_deparser(fsm_file, parser_out, deparser_out)
+                rows.append(
+                    {
+                        "benchmark": "deparser",
+                        "config_id": meta["id"],
+                        "parser_states": parser_states,
+                        "run_number": run_number,
+                        "success": ok,
+                        "duration_s": round(duration, 6),
+                        "compile_time_s": round(compile_time, 6) if run_number == 1 else 0.0,
+                        "parser_time_s": round(parser_time, 6) if run_number == 1 else 0.0,
+                        "input_states": parser_states_out,
+                        "output_states": json_list_size(deparser_out),
+                        "error": err if not ok else "",
+                    }
+                )
+
+        csv_file = run_dir / "deparser_raw.csv"
+        summary_file = run_dir / "summary.json"
+        write_csv(rows, csv_file)
+        write_summary(rows, summary_file)
+        print(f"\nDeparser benchmark completed.\n  - CSV: {csv_file}\n  - Summary: {summary_file}\n")
+        return self._post_benchmark_menu("deparser", run_dir, csv_file)
+
+    def benchmark_full(self, optimized: bool = False) -> bool:
+        mode_label = "OPTIMIZED" if optimized else "NON-OPTIMIZED"
+        print(f"\n=== Benchmark: Full Pipeline ({mode_label}) ===")
+        if optimized and not self._load_optimized_helpers():
+            print("[WARN] Continuing with NON-OPTIMIZED execution because optimized helpers are unavailable.")
+            optimized = False
+        runs = ask_int("Runs per configuration", 5, 1)
+        parser_states = ask_int("Parser states (fixed)", 8, 1)
+        ingress_start = ask_int("Ingress tables (start)", 2, 1)
+        ingress_max = ask_int("Ingress tables (max)", 12, ingress_start)
+        ingress_step = ask_int("Ingress tables (step)", 2, 1)
+        egress_tables = ask_int("Egress tables (fixed)", 1, 0)
+        actions_per_table = ask_int("Actions per table", 2, 1)
+        headers_per_state = ask_int("Headers per state", 1, 1)
+
+        ingress_values = build_range(ingress_start, ingress_max, ingress_step)
+        full_mode = "full_optimized" if optimized else "full"
+        run_dir, gen_dir = self._new_run_dirs(full_mode)
+        rows: List[Dict] = []
+
+        total_cfg = len(ingress_values)
+        print(
+            f"\nGenerating/running {total_cfg} full configurations "
+            f"({mode_label.lower()}; {total_cfg * runs} total runs)..."
+        )
+        for cfg_idx, ingress_tables in enumerate(ingress_values, start=1):
+            meta = self.generator.generate_program(
+                parser_states=parser_states,
+                headers_per_state=headers_per_state,
+                ingress_tables=ingress_tables,
+                egress_tables=egress_tables,
+                actions_per_table=actions_per_table,
+                output_dir=gen_dir,
+                ingress_logic_type="parallel",
+                prog_id_suffix="_full",
+            )
+
+            print(
+                f"\n[CFG {cfg_idx}/{total_cfg}] {meta['id']} | "
+                f"ingress={ingress_tables} egress={egress_tables} runs={runs}"
+            )
+            p4_file = Path(meta["p4_file"])
+            topology_file = Path(meta["topology_file"])
+            runtime_file = Path(meta["runtime_file"])
+            build_dir = gen_dir / f"{meta['id']}_build"
+            print("  - Compiling P4...")
+            compile_ok, compile_time, compile_err, fsm_file = self._compile(p4_file, build_dir)
+            if not compile_ok:
+                print(f"  [X] Compile failed in {compile_time:.3f}s: {compile_err}")
+                rows.append(
+                    {
+                        "benchmark": full_mode,
+                        "config_id": meta["id"],
+                        "ingress_tables": ingress_tables,
+                        "egress_tables": egress_tables,
+                        "run_number": 0,
+                        "success": False,
+                        "duration_s": round(compile_time, 6),
+                        "parser_states_out": 0,
+                        "deparser_states_out": 0,
+                        "error": f"compile: {compile_err}",
+                    }
+                )
+                continue
+            print(f"  [OK] Compile completed in {compile_time:.3f}s")
+
+            for run_number in range(1, runs + 1):
+                run_start = time.time()
+                print(f"    [RUN {run_number}/{runs}] Running parser...")
+                parser_out = build_dir / f"full_parser_run{run_number}.json"
+                parser_ok, parser_time, parser_err = self._run_parser(
+                    fsm_file,
+                    parser_out,
+                    heartbeat_label=f"Parser RUN {run_number}/{runs}",
+                )
+                parser_states_out = json_list_size(parser_out)
+                if not parser_ok or parser_states_out == 0:
+                    err_msg = f"parser: {parser_err}" if parser_err else "parser output empty"
+                    print(
+                        f"    [X] Parser failed in {parser_time:.3f}s "
+                        f"(states={parser_states_out}): {err_msg}"
+                    )
+                    run_duration = round(time.time() - run_start, 6)
+                    rows.append(
+                        {
+                            "benchmark": full_mode,
+                            "config_id": meta["id"],
+                            "ingress_tables": ingress_tables,
+                            "egress_tables": egress_tables,
+                            "run_number": run_number,
+                            "success": False,
+                            "duration_s": run_duration,
+                            "compile_time_s": round(compile_time, 6) if run_number == 1 else 0.0,
+                            "parser_time_s": round(parser_time, 6),
+                            "ingress_time_s": 0.0,
+                            "egress_time_s": 0.0,
+                            "deparser_time_s": 0.0,
+                            "parser_states_out": parser_states_out,
+                            "deparser_states_out": 0,
+                            "error": err_msg,
+                        }
+                    )
+                    continue
+                print(f"    [OK] Parser in {parser_time:.3f}s (states={parser_states_out})")
+
+                current_snapshot = parser_out
+                ingress_total = 0.0
+                egress_total = 0.0
+                run_success = True
+                error_msg = ""
+
+                for idx in range(ingress_tables):
+                    table_name = f"MyIngress.ingress_table_{idx}"
+                    table_out = build_dir / f"full_run{run_number}_ingress_{idx}.json"
+                    print(f"      [Ingress {idx + 1}/{ingress_tables}] {table_name}...")
+                    if optimized:
+                        cache_file = build_dir / f"cache_run{run_number}_{table_name.replace('.', '_')}.json"
+                        ok, duration, err = self._run_ingress_table_cached(
+                            fsm_file=fsm_file,
+                            topology_file=topology_file,
+                            runtime_file=runtime_file,
+                            input_states=current_snapshot,
+                            table_name=table_name,
+                            output_file=table_out,
+                            cache_file=cache_file,
+                            heartbeat_label=f"Ingress {idx + 1}/{ingress_tables} ({table_name}) [cache]",
+                        )
+                    else:
+                        ok, duration, err = self._run_ingress_table(
+                            fsm_file=fsm_file,
+                            topology_file=topology_file,
+                            runtime_file=runtime_file,
+                            input_states=current_snapshot,
+                            table_name=table_name,
+                            output_file=table_out,
+                            heartbeat_label=f"Ingress {idx + 1}/{ingress_tables} ({table_name})",
+                        )
+                    ingress_total += duration
+                    if table_out.exists():
+                        current_snapshot = table_out
+                    if not ok and not table_out.exists():
+                        run_success = False
+                        error_msg = f"ingress {table_name}: {err}"
+                        print(f"      [X] Failed in {duration:.3f}s: {error_msg}")
+                        break
+                    if ok:
+                        print(f"      [OK] {duration:.3f}s")
+                    else:
+                        print(
+                            f"      [!] Returned an error in {duration:.3f}s, "
+                            "but partial output was generated; continuing."
+                        )
+
+                if run_success:
+                    for idx in range(egress_tables):
+                        table_name = f"MyEgress.egress_table_{idx}"
+                        table_out = build_dir / f"full_run{run_number}_egress_{idx}.json"
+                        print(f"      [Egress {idx + 1}/{egress_tables}] {table_name}...")
+                        ok, duration, err = self._run_egress_table(
+                            fsm_file=fsm_file,
+                            runtime_file=runtime_file,
+                            input_states=current_snapshot,
+                            table_name=table_name,
+                            output_file=table_out,
+                            heartbeat_label=f"Egress {idx + 1}/{egress_tables} ({table_name})",
+                        )
+                        egress_total += duration
+                        if table_out.exists():
+                            current_snapshot = table_out
+                        if not ok and not table_out.exists():
+                            run_success = False
+                            error_msg = f"egress {table_name}: {err}"
+                            print(f"      [X] Failed in {duration:.3f}s: {error_msg}")
+                            break
+                        if ok:
+                            print(f"      [OK] {duration:.3f}s")
+                        else:
+                            print(
+                                f"      [!] Returned an error in {duration:.3f}s, "
+                                "but partial output was generated; continuing."
+                            )
+
+                deparser_time = 0.0
+                deparser_out_states = 0
+                if run_success:
+                    deparser_out = build_dir / f"full_run{run_number}_deparser.json"
+                    deparser_input = current_snapshot
+                    deparser_opt_map: Dict[str, Any] | None = None
+                    if optimized and self._optimize_and_process_deparser is not None:
+                        try:
+                            with current_snapshot.open("r", encoding="utf-8") as f:
+                                all_final_states = json.load(f)
+                            deparser_input, deparser_opt_map = self._optimize_and_process_deparser(
+                                all_final_states, build_dir, run_number
+                            )
+                        except Exception as exc:
+                            print(f"      [WARN] Deparser optimization failed: {exc}. Using original states.")
+                            deparser_input = current_snapshot
+                            deparser_opt_map = None
+                    print("      [Deparser] Running...")
+                    deparser_ok, deparser_time, deparser_err = self._run_deparser(
+                        fsm_file=fsm_file,
+                        input_states=deparser_input,
+                        output_file=deparser_out,
+                        heartbeat_label=(
+                            f"Deparser RUN {run_number}/{runs} [opt]"
+                            if optimized
+                            else f"Deparser RUN {run_number}/{runs}"
+                        ),
+                    )
+                    if not deparser_ok:
+                        run_success = False
+                        error_msg = f"deparser: {deparser_err}"
+                        print(f"      [X] Failed in {deparser_time:.3f}s: {error_msg}")
+                    else:
+                        if optimized and deparser_opt_map is not None and self._expand_deparser_results is not None:
+                            try:
+                                expanded_file = self._expand_deparser_results(
+                                    deparser_out, deparser_opt_map, build_dir, run_number
+                                )
+                                deparser_out_states = json_list_size(expanded_file)
+                            except Exception as exc:
+                                print(
+                                    "      [WARN] Failed to expand optimized deparser results: "
+                                    f"{exc}. Keeping optimized output."
+                                )
+                                deparser_out_states = json_list_size(deparser_out)
+                        else:
+                            deparser_out_states = json_list_size(deparser_out)
+                        print(
+                            f"      [OK] {deparser_time:.3f}s "
+                            f"(states={deparser_out_states})"
+                        )
+
+                run_duration = round(time.time() - run_start, 6)
+                rows.append(
+                    {
+                        "benchmark": full_mode,
+                        "config_id": meta["id"],
+                        "ingress_tables": ingress_tables,
+                        "egress_tables": egress_tables,
+                        "run_number": run_number,
+                        "success": run_success,
+                        "duration_s": run_duration,
+                        "compile_time_s": round(compile_time, 6) if run_number == 1 else 0.0,
+                        "parser_time_s": round(parser_time, 6),
+                        "ingress_time_s": round(ingress_total, 6),
+                        "egress_time_s": round(egress_total, 6),
+                        "deparser_time_s": round(deparser_time, 6),
+                        "parser_states_out": parser_states_out,
+                        "deparser_states_out": deparser_out_states,
+                        "error": error_msg,
+                    }
+                )
+                if run_success:
+                    print(
+                        f"    [OK] RUN {run_number}/{runs} completed in {run_duration:.3f}s "
+                        f"(parser={parser_time:.3f}s ingress={ingress_total:.3f}s "
+                        f"egress={egress_total:.3f}s deparser={deparser_time:.3f}s)"
+                    )
+                else:
+                    print(f"    [X] RUN {run_number}/{runs} failed in {run_duration:.3f}s: {error_msg}")
+
+        csv_file = run_dir / "full_raw.csv"
+        summary_file = run_dir / "summary.json"
+        write_csv(rows, csv_file)
+        write_summary(rows, summary_file)
+        print(
+            f"\nFull benchmark ({mode_label.lower()}) completed.\n"
+            f"  - CSV: {csv_file}\n"
+            f"  - Summary: {summary_file}\n"
+        )
+        return self._post_benchmark_menu(full_mode, run_dir, csv_file)
+
+
+def print_menu() -> None:
+    print("\n" + "=" * 72)
+    print("P4SymTest Benchmark CLI")
+    print("=" * 72)
+    print("1) Benchmark Parser")
+    print("2) Benchmark Ingress/Egress Tables")
+    print("3) Benchmark Deparser")
+    print("4) Benchmark Full Pipeline (Non-Optimized)")
+    print("5) Benchmark Full Pipeline (Optimized)")
+    print("0) Exit")
+
+
+def main() -> None:
+    runner = BenchmarkMenuRunner()
+    print(f"Results will be saved in: {OUTPUT_ROOT}")
+    while True:
+        print_menu()
+        choice = input("Choose an option: ").strip()
+        if choice == "0":
+            print("Exiting.")
+            return
+        if choice == "1":
+            keep_running = runner.benchmark_parser()
+            if not keep_running:
+                print("Exiting.")
+                return
+            continue
+        if choice == "2":
+            keep_running = runner.benchmark_tables()
+            if not keep_running:
+                print("Exiting.")
+                return
+            continue
+        if choice == "3":
+            keep_running = runner.benchmark_deparser()
+            if not keep_running:
+                print("Exiting.")
+                return
+            continue
+        if choice == "4":
+            keep_running = runner.benchmark_full(optimized=False)
+            if not keep_running:
+                print("Exiting.")
+                return
+            continue
+        if choice == "5":
+            keep_running = runner.benchmark_full(optimized=True)
+            if not keep_running:
+                print("Exiting.")
+                return
+            continue
+        print("Invalid option.")
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\nInterrupted by user.")
+        sys.exit(130)

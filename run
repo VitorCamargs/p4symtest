@@ -1,0 +1,105 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CONTAINER_NAME="${P4SYMTEST_BENCH_CONTAINER:-p4symtest-backend}"
+HOST_WORKSPACE_DIR="$ROOT_DIR/backend/workspace"
+HOST_OPEN_REQUEST_FILE="$HOST_WORKSPACE_DIR/.benchmark_open_requests"
+CONTAINER_OPEN_REQUEST_FILE="/app/workspace/.benchmark_open_requests"
+
+usage() {
+  cat <<'EOF'
+Usage:
+  ./run benchmark
+
+Environment:
+  P4SYMTEST_BENCH_CONTAINER   Override backend container name (default: p4symtest-backend)
+EOF
+}
+
+if [[ $# -lt 1 ]]; then
+  usage
+  exit 1
+fi
+
+COMMAND="$1"
+shift || true
+
+if [[ "$COMMAND" != "benchmark" ]]; then
+  usage
+  exit 1
+fi
+
+if ! command -v docker >/dev/null 2>&1; then
+  echo "Error: docker was not found in PATH."
+  exit 1
+fi
+
+if ! docker ps --format '{{.Names}}' | grep -Fxq "$CONTAINER_NAME"; then
+  echo "Error: container '$CONTAINER_NAME' is not running."
+  echo "Start it first with: docker compose up -d"
+  exit 1
+fi
+
+echo "Preparing benchmark CLI inside container '$CONTAINER_NAME'..."
+if ! docker exec "$CONTAINER_NAME" test -f /app/benchmark_cli/run_benchmark_menu.py; then
+  echo "Error: /app/benchmark_cli/run_benchmark_menu.py was not found in the container."
+  echo "Check whether files exist under backend/benchmark_cli on the host."
+  exit 1
+fi
+
+if [[ ! -d "$HOST_WORKSPACE_DIR" ]]; then
+  echo "Error: workspace directory not found on host: $HOST_WORKSPACE_DIR"
+  exit 1
+fi
+
+DOCKER_TTY_ARGS=(-i)
+if [[ -t 0 && -t 1 ]]; then
+  DOCKER_TTY_ARGS=(-it)
+fi
+
+open_on_host() {
+  local file_path="$1"
+  if command -v open >/dev/null 2>&1; then
+    open "$file_path" >/dev/null 2>&1 || true
+    return
+  fi
+  if command -v xdg-open >/dev/null 2>&1; then
+    xdg-open "$file_path" >/dev/null 2>&1 || true
+  fi
+}
+
+tail_open_requests() {
+  local host_path
+  tail -n0 -F "$HOST_OPEN_REQUEST_FILE" 2>/dev/null | while IFS= read -r raw_path; do
+    [[ -z "$raw_path" ]] && continue
+    host_path="$raw_path"
+    if [[ "$raw_path" == /app/workspace/* ]]; then
+      host_path="$HOST_WORKSPACE_DIR/${raw_path#/app/workspace/}"
+    fi
+    if [[ -f "$host_path" ]]; then
+      open_on_host "$host_path"
+    fi
+  done
+}
+
+: > "$HOST_OPEN_REQUEST_FILE"
+tail_open_requests &
+WATCHER_PID=$!
+
+cleanup() {
+  if [[ -n "${WATCHER_PID:-}" ]]; then
+    kill "$WATCHER_PID" >/dev/null 2>&1 || true
+  fi
+}
+
+trap cleanup EXIT INT TERM
+
+echo "Opening interactive menu..."
+docker exec "${DOCKER_TTY_ARGS[@]}" \
+  -e P4SYMTEST_OPEN_REQUEST_FILE="$CONTAINER_OPEN_REQUEST_FILE" \
+  "$CONTAINER_NAME" \
+  python3 /app/benchmark_cli/run_benchmark_menu.py
+
+exit_code=$?
+exit "$exit_code"

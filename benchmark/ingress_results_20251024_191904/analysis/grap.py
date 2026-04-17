@@ -1,6 +1,53 @@
 import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
+import argparse
+import subprocess
+import sys
+from pathlib import Path
+
+
+DEFAULT_OUTPUT_PDF = "grafico2.pdf"
+DEFAULT_OUTPUT_PNG = "boxplot_from_raw_data.png"
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Gera gráfico do benchmark de ingress.")
+    parser.add_argument(
+        "--output-pdf",
+        default=DEFAULT_OUTPUT_PDF,
+        help=f"Nome/caminho do PDF de saída (default: {DEFAULT_OUTPUT_PDF})",
+    )
+    parser.add_argument(
+        "--output-png",
+        default=DEFAULT_OUTPUT_PNG,
+        help=f"Nome/caminho do PNG de saída (default: {DEFAULT_OUTPUT_PNG})",
+    )
+    parser.add_argument(
+        "--open",
+        action="store_true",
+        help="Tenta abrir automaticamente o PDF após salvar.",
+    )
+    return parser.parse_args()
+
+
+def try_open_file(path: Path) -> None:
+    try:
+        if sys.platform == "darwin":
+            subprocess.run(["open", str(path)], check=False)
+        elif sys.platform.startswith("linux"):
+            subprocess.run(["xdg-open", str(path)], check=False)
+        elif sys.platform.startswith("win"):
+            import os
+
+            os.startfile(str(path))  # type: ignore[attr-defined]
+        else:
+            print(f"Aviso: plataforma sem suporte para auto-open ({sys.platform}).")
+    except Exception as e:
+        print(f"Aviso: não foi possível abrir o PDF automaticamente: {e}")
+
+
+args = parse_args()
 
 # Load CSV (Alterado para os dados brutos)
 try:
@@ -172,8 +219,19 @@ except Exception as e:
 
 # ---- FINAL ----
 # Remover configuração global de rcParams
-output_filename = "boxplot_from_raw_data.png"
-plt.show()
+try:
+    print("Abrindo visualização interativa... ajuste zoom/pan e feche a janela para salvar os arquivos.")
+    plt.show()
+except Exception as e:
+    print(f"Aviso: não foi possível abrir a janela interativa: {e}")
 
-plt.savefig(output_filename)
-print(f"Chart saved to {output_filename}")
+output_pdf = Path(args.output_pdf).resolve()
+fig.savefig(output_pdf, format="pdf", bbox_inches="tight")
+print(f"PDF salvo em: {output_pdf}")
+
+output_png = Path(args.output_png).resolve()
+fig.savefig(output_png, bbox_inches="tight")
+print(f"PNG salvo em: {output_png}")
+
+if args.open:
+    try_open_file(output_pdf)
