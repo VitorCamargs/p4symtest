@@ -3,4 +3,23 @@
 
 # Artefatos de execução Python
 __pycache__/
-*.pyc
+*.py[cod]
+
+# Ambientes virtuais locais
+.venv/
+backend/.venv/
+
+# Dependências frontend locais
+frontendV2/node_modules/
+
+# Artefatos temporários de benchmark e execução simbólica
+backend/workspace/.benchmark_open_requests
+backend/workspace/benchmark_runs/
+backend/workspace/output/
+backend/workspace/p4files/
+backend/workspace/custom_test_out/
+backend/workspace/programa.json
+benchmark/*_results_*/
+
+# Temporários de SO/edição
+.DS_Store

@@ -43,20 +43,6 @@ services:
     stdin_open: true
     tty: true
 
-  # Mock backend opcional para testes locais de UI (não usado na transição para backend real)
-  mock-backend:
-    image: python:3.11-slim
-    container_name: p4symtest-mock-backend
-    profiles: ["mock"]
-    working_dir: /app
-    command: sh -c "pip install --no-cache-dir -r /app/mock_backend/requirements.txt && python /app/mock_backend/mock_server.py"
-    ports:
-      - "5001:5001"
-    volumes:
-      - ./:/app
-    networks:
-      - p4symtest-network
-
 networks:
   p4symtest-network:
     driver: bridge
