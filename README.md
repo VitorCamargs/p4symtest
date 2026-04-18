@@ -37,7 +37,7 @@ The framework is divided into client-side interactive modules and a backend cont
   - A Flask Server that dispatches updates to the Frontend Engine via an API.
 
 *(Visualization of logical structures after compilation)*:
-![Compiled Structures Overview](file:///Users/vcmoura/.gemini/antigravity/brain/bde88c98-9013-42e9-b56d-87647b53c177/compiled_structures_panel_detail_1776472083547.png)
+![Compiled Structures Overview](assets/compiled-structures-overview.png)
 
 ---
 
