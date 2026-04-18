@@ -36,8 +36,8 @@ The framework is divided into client-side interactive modules and a backend cont
   - **State Manager / Orchestrator**: Mechanisms that handle the sequential and consistent reading and saving of *Snapshots* via JSON communication.
   - A Flask Server that dispatches updates to the Frontend Engine via an API.
 
-*(You can add an architectural screenshot here for visualization)*:
-![Architecture Diagram Placeholder](https://via.placeholder.com/800x400.png?text=Insert+Architecture+Diagram+Here)
+*(Visualization of logical structures after compilation)*:
+![Compiled Structures Overview](file:///Users/vcmoura/.gemini/antigravity/brain/bde88c98-9013-42e9-b56d-87647b53c177/compiled_structures_panel_detail_1776472083547.png)
 
 ---
 
@@ -58,7 +58,25 @@ The repository orchestrates the backend setup, its persistent state volume, the 
    ```bash
    docker compose up --build -d
    ```
-3. Open your local web browser at: **`http://localhost:5173/`**.
+3. Open your local web browser at: **`http://localhost:5173/`** (default).
+
+The frontend talks to the backend through `/api` proxying.
+By default, Compose tries frontend host port `5173` first and falls back automatically within `5173-5273` if `5173` is busy.
+If you need to know the chosen frontend host port:
+```bash
+docker compose port frontend 5173
+```
+
+By default, Docker Compose now auto-selects a free host port for backend container port `5000`.
+If you need to know the chosen host port:
+```bash
+docker compose port backend 5000
+```
+
+To force a fixed frontend host port manually:
+```bash
+FRONTEND_HOST_PORT=5180 docker compose up --build -d
+```
 
 ### 🖥️ Execution via Graphical Interface (Frontend V2)
 
@@ -69,8 +87,8 @@ The recommended way to explore the framework is through the graphical interface,
 3. **Iterative Table Analysis**: Navigate to a specific routing rule, one of the match action tables you defined. Click **Verify** solely on that isolated block.
 4. **Validating Results**: The **Z3** solver will fetch the incoming packet states from the parser snapshot and analyze the table logic. In the right lateral panel, the verification will formally prove which instances correctly reach forwarding behaviors versus implicitly dropping, providing a clean diagnosis without requiring end-to-end simulated traffic.
 
-*(Add representative screenshots showing these actions in the frontend panels to improve this explanatory material)*
-![GUI Example Placeholder](https://via.placeholder.com/800x400.png?text=Insert+GUI+Example+Screenshot+Here)
+*(Interactive demonstration of the compiler and verification workflow)*:
+![GUI Usage Demo](assets/interface-demo.gif)
 
 ### 💻 Execution via CLI & Benchmarks
 
@@ -149,10 +167,12 @@ Benchmark execution is unified into an interactive terminal workflow that runs i
 docker compose up -d backend
 ```
 
-If port `5000` is busy on your machine, start with a different host port:
+If you want to force a fixed host port manually:
 ```bash
 BACKEND_HOST_PORT=5500 docker compose up -d backend
 ```
+
+If `BACKEND_HOST_PORT` is not set, Compose automatically picks a free host port.
 
 2. From the repository root (local machine), start the benchmark CLI:
 ```bash

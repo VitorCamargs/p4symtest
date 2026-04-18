@@ -546,6 +546,11 @@ def analyze_deparser():
 # ENDPOINTS - INFORMAÇÕES GERAIS
 # ============================================
 
+@app.route('/api/health', methods=['GET'])
+def health_check():
+    """Healthcheck simples para Docker Compose."""
+    return jsonify({'status': 'ok'}), 200
+
 @app.route('/api/info/components', methods=['GET'])
 def get_components():
     """Retorna informações sobre os componentes do programa P4 (do FSM)"""
