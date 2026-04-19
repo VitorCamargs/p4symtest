@@ -520,9 +520,9 @@ class BenchmarkMenuRunner:
             pipelines = ["ingress", "egress"]
 
         runs = ask_int("Runs per configuration", 10, 1)
-        parser_start = ask_int("Parser states (start)", 3, 1)
-        parser_max = ask_int("Parser states (max)", 40, parser_start)
-        parser_step = ask_int("Parser states (step)", 7, 1)
+        parser_start = ask_int("Parser states (start, paper-aligned range 3..15 -> ~4..40 entrance states)", 3, 1)
+        parser_max = ask_int("Parser states (max)", 15, parser_start)
+        parser_step = ask_int("Parser states (step)", 3, 1)
         actions_start = ask_int("Actions per table (start)", 2, 1)
         actions_max = ask_int("Actions per table (max)", 15, actions_start)
         actions_step = ask_int("Actions per table (step)", 3, 1)
