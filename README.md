@@ -100,6 +100,7 @@ For testing scalability, mitigating paths, and analyzing solving time constraint
 
 #### 1. Backend Symbolic Scripts
 First, activate the Python environment:
+(Skip if running on docker)
 ```bash
 cd backend/
 python3 -m venv .venv
@@ -175,6 +176,18 @@ BACKEND_HOST_PORT=5500 docker compose up -d backend
 If `BACKEND_HOST_PORT` is not set, Compose automatically picks a free host port.
 
 2. From the repository root (local machine), start the benchmark CLI:
+
+Linux/macOS:
+```bash
+./run benchmark
+```
+
+Windows (PowerShell):
+```powershell
+.\run.ps1 benchmark
+```
+
+Windows (Git Bash or WSL):
 ```bash
 ./run benchmark
 ```
@@ -193,7 +206,7 @@ This command opens an interactive menu (executed in `p4symtest-backend`) with:
 
 Graph generation uses the benchmark CSV of that run and saves a PDF in the same run directory.  
 By default, the generated filename pattern is `graph_<mode>.pdf`.
-When `--open` is selected, the host wrapper (`./run benchmark`) requests the host OS to open the PDF automatically.
+When `--open` is selected, the host wrapper (`./run benchmark` on Linux/macOS/WSL, `.\run.ps1 benchmark` on PowerShell) requests the host OS to open the PDF automatically.
 
 4. Output location:
 ```text
@@ -210,7 +223,7 @@ Examples of `<mode>`:
 Notes:
 - Option `4` is the full pipeline baseline (non-optimized).
 - Option `5` enables the optimized full pipeline flow (table cache + deparser-state optimization/expansion).
-- If you execute the menu directly inside the container (`docker exec ... /app/run benchmark`), benchmarks still run normally, but automatic PDF opening on the host is not guaranteed. Use `./run benchmark` on the host for full auto-open behavior.
+- If you execute the menu directly inside the container (`docker exec ... /app/run benchmark`), benchmarks still run normally, but automatic PDF opening on the host is not guaranteed. Use the host wrapper (`./run benchmark` or `.\run.ps1 benchmark`) for full auto-open behavior.
 
 ## License and Copyright
 

@@ -1,6 +1,5 @@
 {
   "s1": {
-    "tbl_programa134": [],
     "MyIngress.ipv4_lpm": [
       {
         "match": {
@@ -9,9 +8,9 @@
             32
           ]
         },
-        "action": "MyIngress.set_nhop",
+        "action": "MyIngress.ipv4_forward",
         "action_params": {
-          "nhop_dmac": "00:00:00:00:01:00",
+          "dstAddr": "00:00:00:00:01:00",
           "port": "1"
         }
       },
@@ -22,66 +21,55 @@
             24
           ]
         },
-        "action": "MyIngress.set_nhop",
+        "action": "MyIngress.ipv4_forward",
         "action_params": {
-          "nhop_dmac": "00:aa:bb:cc:dd:02",
+          "dstAddr": "00:aa:bb:cc:dd:02",
           "port": "2"
         }
       }
     ],
-    "MyIngress.ipv4_acl": [
+    "MyIngress.myTunnel_exact": [
       {
         "match": {
-          "hdr.ipv4.srcAddr": [
-            "0.0.0.0",
-            "255.255.255.255"
-          ],
-          "hdr.ipv4.dstAddr": [
-            "10.0.1.10",
-            "255.255.255.255"
-          ]
+          "hdr.myTunnel.dst_id": "11"
         },
-        "action": "MyIngress.set_class",
+        "action": "MyIngress.myTunnel_forward",
         "action_params": {
-          "tag": "1"
+          "port": "1"
         }
       },
       {
         "match": {
-          "hdr.ipv4.srcAddr": [
-            "0.0.0.0",
-            "255.255.255.255"
-          ],
-          "hdr.ipv4.dstAddr": [
-            "10.0.2.0",
-            "255.255.255.0"
-          ]
+          "hdr.myTunnel.dst_id": "12"
         },
-        "action": "MyIngress.set_class",
+        "action": "MyIngress.myTunnel_forward",
         "action_params": {
-          "tag": "0"
+          "port": "2"
         }
       }
     ],
-    "MyIngress.class_gate": [
+    "MyEgress.egress_port_smac": [
       {
         "match": {
-          "hdr.ipv4.dstAddr": "10.0.1.10"
+          "standard_metadata.egress_port": "1"
         },
-        "action": "MyIngress.set_post_acl_tag",
-        "action_params": {}
+        "action": "MyEgress.rewrite_src_mac",
+        "action_params": {
+          "smac": "00:aa:bb:cc:dd:01"
+        }
       },
       {
         "match": {
-          "hdr.ipv4.dstAddr": "10.0.2.0"
+          "standard_metadata.egress_port": "2"
         },
-        "action": "MyIngress.set_post_acl_tag",
-        "action_params": {}
+        "action": "MyEgress.rewrite_src_mac",
+        "action_params": {
+          "smac": "00:aa:bb:cc:dd:01"
+        }
       }
     ]
   },
   "s2": {
-    "tbl_programa134": [],
     "MyIngress.ipv4_lpm": [
       {
         "match": {
@@ -90,9 +78,9 @@
             24
           ]
         },
-        "action": "MyIngress.set_nhop",
+        "action": "MyIngress.ipv4_forward",
         "action_params": {
-          "nhop_dmac": "00:aa:bb:cc:dd:01",
+          "dstAddr": "00:aa:bb:cc:dd:01",
           "port": "1"
         }
       },
@@ -103,57 +91,51 @@
             32
           ]
         },
-        "action": "MyIngress.set_nhop",
+        "action": "MyIngress.ipv4_forward",
         "action_params": {
-          "nhop_dmac": "00:00:00:00:02:00",
+          "dstAddr": "00:00:00:00:02:00",
           "port": "2"
         }
       }
     ],
-    "MyIngress.ipv4_acl": [
+    "MyIngress.myTunnel_exact": [
       {
         "match": {
-          "hdr.ipv4.srcAddr": [
-            "0.0.0.0",
-            "255.255.255.255"
-          ],
-          "hdr.ipv4.dstAddr": [
-            "10.0.1.0",
-            "255.255.255.0"
-          ]
+          "hdr.myTunnel.dst_id": "21"
         },
-        "action": "MyIngress.set_class",
-        "action_params": {}
+        "action": "MyIngress.myTunnel_forward",
+        "action_params": {
+          "port": "1"
+        }
       },
       {
         "match": {
-          "hdr.ipv4.srcAddr": [
-            "0.0.0.0",
-            "255.255.255.255"
-          ],
-          "hdr.ipv4.dstAddr": [
-            "10.0.2.10",
-            "255.255.255.255"
-          ]
+          "hdr.myTunnel.dst_id": "22"
         },
-        "action": "MyIngress.set_class",
-        "action_params": {}
+        "action": "MyIngress.myTunnel_forward",
+        "action_params": {
+          "port": "2"
+        }
       }
     ],
-    "MyIngress.class_gate": [
+    "MyEgress.egress_port_smac": [
       {
         "match": {
-          "hdr.ipv4.dstAddr": "10.0.1.0"
+          "standard_metadata.egress_port": "1"
         },
-        "action": "MyIngress.set_post_acl_tag",
-        "action_params": {}
+        "action": "MyEgress.rewrite_src_mac",
+        "action_params": {
+          "smac": "00:aa:bb:cc:dd:02"
+        }
       },
       {
         "match": {
-          "hdr.ipv4.dstAddr": "10.0.2.10"
+          "standard_metadata.egress_port": "2"
         },
-        "action": "MyIngress.set_post_acl_tag",
-        "action_params": {}
+        "action": "MyEgress.rewrite_src_mac",
+        "action_params": {
+          "smac": "00:aa:bb:cc:dd:02"
+        }
       }
     ]
   }
