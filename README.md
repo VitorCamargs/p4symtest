@@ -212,6 +212,13 @@ Notes:
 - Option `5` enables the optimized full pipeline flow (table cache + deparser-state optimization/expansion).
 - If you execute the menu directly inside the container (`docker exec ... /app/run benchmark`), benchmarks still run normally, but automatic PDF opening on the host is not guaranteed. Use `./run benchmark` on the host for full auto-open behavior.
 
+## License and Copyright
+
+This project is licensed under the **GNU General Public License v3.0 (GPL-3.0)**.  
+See [LICENSE](LICENSE) for the full text.
+
+Copyright (c) the P4SymTest authors and contributors.
+
 ---
 
 *Development and Documentation Citation: This repository forms the basis of the research reported as the modular framework system `P4SymTest`*
