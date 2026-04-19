@@ -56,6 +56,18 @@ def build_range(start: int, end: int, step: int) -> List[int]:
     return list(range(start, end + 1, step))
 
 
+def format_elapsed(total_seconds: float) -> str:
+    total_seconds = max(0.0, float(total_seconds))
+    hours = int(total_seconds // 3600)
+    minutes = int((total_seconds % 3600) // 60)
+    seconds = total_seconds - (hours * 3600) - (minutes * 60)
+    if hours > 0:
+        return f"{hours}h {minutes}m {seconds:.1f}s"
+    if minutes > 0:
+        return f"{minutes}m {seconds:.1f}s"
+    return f"{seconds:.3f}s"
+
+
 def ask_int(prompt: str, default: int, minimum: int = 1) -> int:
     while True:
         raw = input(f"{prompt} [{default}]: ").strip()
@@ -419,9 +431,10 @@ class BenchmarkMenuRunner:
 
     def benchmark_parser(self) -> bool:
         print("\n=== Benchmark: Parser ===")
+        benchmark_start = time.time()
         runs = ask_int("Runs per configuration", 10, 1)
         parser_start = ask_int("Parser states (start)", 3, 1)
-        parser_max = ask_int("Parser states (max)", 30, parser_start)
+        parser_max = ask_int("Parser states (max)", 20, parser_start)
         parser_step = ask_int("Parser states (step)", 3, 1)
         headers_per_state = ask_int("Headers per state", 2, 1)
 
@@ -482,15 +495,22 @@ class BenchmarkMenuRunner:
         summary_file = run_dir / "summary.json"
         write_csv(rows, csv_file)
         write_summary(rows, summary_file)
-        print(f"\nParser benchmark completed.\n  - CSV: {csv_file}\n  - Summary: {summary_file}\n")
+        total_elapsed = time.time() - benchmark_start
+        print(
+            f"\nParser benchmark completed.\n"
+            f"  - CSV: {csv_file}\n"
+            f"  - Summary: {summary_file}\n"
+            f"  - Total elapsed: {format_elapsed(total_elapsed)} ({total_elapsed:.3f}s)\n"
+        )
         return self._post_benchmark_menu("parser", run_dir, csv_file)
 
     def benchmark_tables(self) -> bool:
         print("\n=== Benchmark: Ingress/Egress Tables ===")
+        benchmark_start = time.time()
         pipeline_choice = ask_choice(
             "Pipeline",
             {"1": "Ingress", "2": "Egress", "3": "Ingress + Egress"},
-            "3",
+            "1",
         )
         if pipeline_choice == "1":
             pipelines = ["ingress"]
@@ -501,8 +521,8 @@ class BenchmarkMenuRunner:
 
         runs = ask_int("Runs per configuration", 10, 1)
         parser_start = ask_int("Parser states (start)", 3, 1)
-        parser_max = ask_int("Parser states (max)", 30, parser_start)
-        parser_step = ask_int("Parser states (step)", 3, 1)
+        parser_max = ask_int("Parser states (max)", 40, parser_start)
+        parser_step = ask_int("Parser states (step)", 7, 1)
         actions_start = ask_int("Actions per table (start)", 2, 1)
         actions_max = ask_int("Actions per table (max)", 15, actions_start)
         actions_step = ask_int("Actions per table (step)", 3, 1)
@@ -622,11 +642,18 @@ class BenchmarkMenuRunner:
         summary_file = run_dir / "summary.json"
         write_csv(rows, csv_file)
         write_summary(rows, summary_file)
-        print(f"\nTable benchmark completed.\n  - CSV: {csv_file}\n  - Summary: {summary_file}\n")
+        total_elapsed = time.time() - benchmark_start
+        print(
+            f"\nTable benchmark completed.\n"
+            f"  - CSV: {csv_file}\n"
+            f"  - Summary: {summary_file}\n"
+            f"  - Total elapsed: {format_elapsed(total_elapsed)} ({total_elapsed:.3f}s)\n"
+        )
         return self._post_benchmark_menu("tables", run_dir, csv_file)
 
     def benchmark_deparser(self) -> bool:
         print("\n=== Benchmark: Deparser ===")
+        benchmark_start = time.time()
         runs = ask_int("Runs per configuration", 10, 1)
         parser_start = ask_int("Parser states (start)", 3, 1)
         parser_max = ask_int("Parser states (max)", 30, parser_start)
@@ -710,12 +737,19 @@ class BenchmarkMenuRunner:
         summary_file = run_dir / "summary.json"
         write_csv(rows, csv_file)
         write_summary(rows, summary_file)
-        print(f"\nDeparser benchmark completed.\n  - CSV: {csv_file}\n  - Summary: {summary_file}\n")
+        total_elapsed = time.time() - benchmark_start
+        print(
+            f"\nDeparser benchmark completed.\n"
+            f"  - CSV: {csv_file}\n"
+            f"  - Summary: {summary_file}\n"
+            f"  - Total elapsed: {format_elapsed(total_elapsed)} ({total_elapsed:.3f}s)\n"
+        )
         return self._post_benchmark_menu("deparser", run_dir, csv_file)
 
     def benchmark_full(self, optimized: bool = False) -> bool:
         mode_label = "OPTIMIZED" if optimized else "NON-OPTIMIZED"
         print(f"\n=== Benchmark: Full Pipeline ({mode_label}) ===")
+        benchmark_start = time.time()
         if optimized and not self._load_optimized_helpers():
             print("[WARN] Continuing with NON-OPTIMIZED execution because optimized helpers are unavailable.")
             optimized = False
@@ -980,10 +1014,12 @@ class BenchmarkMenuRunner:
         summary_file = run_dir / "summary.json"
         write_csv(rows, csv_file)
         write_summary(rows, summary_file)
+        total_elapsed = time.time() - benchmark_start
         print(
             f"\nFull benchmark ({mode_label.lower()}) completed.\n"
             f"  - CSV: {csv_file}\n"
             f"  - Summary: {summary_file}\n"
+            f"  - Total elapsed: {format_elapsed(total_elapsed)} ({total_elapsed:.3f}s)\n"
         )
         return self._post_benchmark_menu(full_mode, run_dir, csv_file)
 
