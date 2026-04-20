@@ -4,6 +4,8 @@ import sys
 import z3
 from z3 import *
 import os
+import re
+from collections import Counter
 from contextlib import contextmanager
 from pathlib import Path
 import hashlib # Import hashlib if not already imported
@@ -82,8 +84,206 @@ def parse_field_update_expr(expr_str, decls, target_var):
         raise ValueError("Could not isolate field-update expression with matching sort")
     return candidate
 
+def _env_flag(name, default=False):
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {'1', 'true', 'yes', 'on', 'y'}
+
+def _normalize_solver_mode(value):
+    if value is None:
+        return "incremental"
+    mode = value.strip().lower()
+    if mode in {"incremental", "legacy"}:
+        return mode
+    return "incremental"
+
+def _state_field_key(field_str):
+    parts = field_str.split('.')
+    if len(parts) == 2:
+        return tuple(parts)
+    if len(parts) == 3:
+        return (parts[1], parts[2])
+    return None
+
+def _parse_assertion_expr(expr_smt2, decls, parse_cache):
+    if expr_smt2 in parse_cache:
+        return parse_cache[expr_smt2]
+    wrapped = f"(assert {expr_smt2})"
+    with suppress_c_stdout_stderr():
+        parsed = parse_smt2_string(wrapped, decls=decls)
+    if isinstance(parsed, z3.AstVector):
+        if len(parsed) != 1:
+            raise ValueError(f"SMT assertion produced {len(parsed)} assertions (expected 1)")
+        parsed = parsed[0]
+    if not isinstance(parsed, z3.BoolRef):
+        raise ValueError(f"SMT assertion is not BoolRef: {type(parsed).__name__}")
+    parse_cache[expr_smt2] = parsed
+    return parsed
+
+def _parse_state_constraints(parser_constraints_smt2, decls, parse_cache):
+    parsed_constraints = []
+    for expr_smt2 in parser_constraints_smt2:
+        parsed_constraints.append(_parse_assertion_expr(expr_smt2, decls, parse_cache))
+    return parsed_constraints
+
+def _load_state_symbolic_fields(state, fields, decls, field_update_cache):
+    current_symbolic_fields = fields.copy()
+    for field_str, expr_str in state.get("field_updates", {}).items():
+        field_key = _state_field_key(field_str)
+        if not field_key or field_key not in current_symbolic_fields:
+            continue
+        target_var = fields.get(field_key)
+        if target_var is None:
+            continue
+        cache_key = (field_key[0], field_key[1], expr_str)
+        if cache_key in field_update_cache:
+            current_symbolic_fields[field_key] = field_update_cache[cache_key]
+            continue
+        try:
+            parsed_expr = parse_field_update_expr(expr_str, decls=decls, target_var=target_var)
+            field_update_cache[cache_key] = parsed_expr
+            current_symbolic_fields[field_key] = parsed_expr
+        except Exception as e:
+            print(f"Erro parse SMT field_update '{field_str}': {e}")
+    return current_symbolic_fields
+
+def _pick_path_from_model(model, all_path_conditions):
+    if not all_path_conditions:
+        return None
+    for p_conds in all_path_conditions:
+        if not p_conds:
+            return p_conds
+        try:
+            cond_eval = model.eval(And(*p_conds), model_completion=True)
+            if z3.is_true(cond_eval):
+                return p_conds
+        except Exception:
+            continue
+    return all_path_conditions[0]
+
+def _compare_state_outputs(states_a, states_b):
+    temp_id_pattern = re.compile(r'\b([A-Za-z_][A-Za-z0-9_]*)!\d+\b')
+    commutative_ops = {'or', 'and', '=', 'bvand', 'bvor', 'bvadd', 'bvmul', '+', '*', 'xor', 'bvxor'}
+
+    def normalize_temp_ids(text):
+        if not isinstance(text, str):
+            return text
+        token_map = {}
+        token_idx = {}
+
+        def repl(match):
+            token = match.group(0)
+            prefix = match.group(1)
+            if token not in token_map:
+                next_idx = token_idx.get(prefix, 0) + 1
+                token_idx[prefix] = next_idx
+                token_map[token] = f"{prefix}!{next_idx}"
+            return token_map[token]
+
+        return temp_id_pattern.sub(repl, text)
+
+    def tokenize_sexpr(text):
+        tokens = []
+        current = []
+        for ch in text:
+            if ch in ('(', ')'):
+                if current:
+                    tokens.append(''.join(current))
+                    current = []
+                tokens.append(ch)
+                continue
+            if ch.isspace():
+                if current:
+                    tokens.append(''.join(current))
+                    current = []
+                continue
+            current.append(ch)
+        if current:
+            tokens.append(''.join(current))
+        return tokens
+
+    def parse_sexpr(tokens, idx=0):
+        if idx >= len(tokens):
+            raise ValueError("unexpected end while parsing s-expression")
+        token = tokens[idx]
+        if token != '(':
+            return token, idx + 1
+        idx += 1
+        node = []
+        while idx < len(tokens) and tokens[idx] != ')':
+            child, idx = parse_sexpr(tokens, idx)
+            node.append(child)
+        if idx >= len(tokens) or tokens[idx] != ')':
+            raise ValueError("missing closing parenthesis in s-expression")
+        return node, idx + 1
+
+    def render_sexpr(node):
+        if isinstance(node, list):
+            return '(' + ' '.join(render_sexpr(child) for child in node) + ')'
+        return str(node)
+
+    def canonicalize_sexpr(node):
+        if not isinstance(node, list):
+            return node
+        if not node:
+            return node
+        head = canonicalize_sexpr(node[0])
+        args = [canonicalize_sexpr(arg) for arg in node[1:]]
+        if isinstance(head, str) and head in commutative_ops:
+            args = sorted(args, key=render_sexpr)
+        return [head] + args
+
+    def normalize_smt(text):
+        if not isinstance(text, str):
+            return text
+        text = normalize_temp_ids(text)
+        stripped = text.strip()
+        if not stripped.startswith('('):
+            return text
+        try:
+            tokens = tokenize_sexpr(stripped)
+            parsed, next_idx = parse_sexpr(tokens, 0)
+            if next_idx != len(tokens):
+                return text
+            canonical = canonicalize_sexpr(parsed)
+            return render_sexpr(canonical)
+        except Exception:
+            return text
+
+    def normalize_state(state):
+        normalized = {
+            "description": state.get("description"),
+            "present_headers": state.get("present_headers", []),
+            "history": state.get("history", []),
+        }
+        normalized["z3_constraints_smt2"] = [normalize_smt(c) for c in state.get("z3_constraints_smt2", [])]
+        normalized["field_updates"] = {
+            k: normalize_smt(v) for k, v in state.get("field_updates", {}).items()
+        }
+        return normalized
+
+    norm_a = [json.dumps(normalize_state(st), sort_keys=True, ensure_ascii=False) for st in states_a]
+    norm_b = [json.dumps(normalize_state(st), sort_keys=True, ensure_ascii=False) for st in states_b]
+    if len(norm_a) != len(norm_b):
+        return False, f"state count mismatch: {len(norm_a)} vs {len(norm_b)}"
+    counter_a = Counter(norm_a)
+    counter_b = Counter(norm_b)
+    if counter_a == counter_b:
+        return True, "outputs are equivalent"
+    missing = counter_a - counter_b
+    extra = counter_b - counter_a
+    if missing:
+        first_missing = next(iter(missing))
+        return False, f"missing state in second output: {first_missing[:220]}"
+    if extra:
+        first_extra = next(iter(extra))
+        return False, f"extra state in second output: {first_extra[:220]}"
+    return False, "outputs differ"
+
 # --- LÓGICA DE ANÁLISE DE FLUXO DE CONTROLE ---
 _path_cache = {}
+_all_paths_cache = {}
 def _field_key_from_node_value(field_val):
     if not isinstance(field_val, (list, tuple)):
         return None
@@ -252,6 +452,44 @@ def find_path_to_table(pipeline_data, start_node_name, target_table_name, visite
         path_true = find_path_to_table(pipeline_data, cond_node.get('true_next'), target_table_name, visited_nodes.copy(), fields)
         if path_true is not None: result = [cond_expr] + path_true; _path_cache[path_key] = result; return result
     _path_cache[path_key] = None; return None
+
+def find_paths_to_table(pipeline_data, start_node_name, target_table_name, visited_nodes, fields):
+    """Encontra todos os caminhos e suas condições Z3."""
+    path_key = (start_node_name, target_table_name)
+    if path_key in _all_paths_cache:
+        return _all_paths_cache[path_key]
+    if start_node_name == target_table_name:
+        return [[]]
+    if start_node_name is None or start_node_name in visited_nodes:
+        return []
+    visited_nodes.add(start_node_name)
+
+    all_paths = []
+
+    table_node = next((t for t in pipeline_data.get('tables', []) if t.get('name') == start_node_name), None)
+    if table_node:
+        next_node = table_node.get('base_default_next')
+        if next_node:
+            paths = find_paths_to_table(pipeline_data, next_node, target_table_name, visited_nodes.copy(), fields)
+            all_paths.extend(paths)
+        for _, next_node_act in table_node.get('next_tables', {}).items():
+            paths = find_paths_to_table(pipeline_data, next_node_act, target_table_name, visited_nodes.copy(), fields)
+            all_paths.extend(paths)
+
+    cond_node = next((c for c in pipeline_data.get('conditionals', []) if c.get('name') == start_node_name), None)
+    if cond_node:
+        cond_expr = build_z3_expression_for_conditional(cond_node.get('expression'), fields)
+
+        paths_false = find_paths_to_table(pipeline_data, cond_node.get('false_next'), target_table_name, visited_nodes.copy(), fields)
+        for p in paths_false:
+            all_paths.append([Not(cond_expr)] + p)
+
+        paths_true = find_paths_to_table(pipeline_data, cond_node.get('true_next'), target_table_name, visited_nodes.copy(), fields)
+        for p in paths_true:
+            all_paths.append([cond_expr] + p)
+
+    _all_paths_cache[path_key] = all_paths
+    return all_paths
 
 # --- LÓGICA DE EXECUÇÃO SIMBÓLICA ---
 def build_z3_expression(expr_node, current_fields, default_bw=32):
@@ -522,6 +760,207 @@ def execute_symbolic_table_egress(table_def, current_fields, runtime_entries, fs
              except z3.Z3Exception: next_fields[field_key] = final_expr
     return next_fields
 
+def _extract_table_updates(final_sym_fields, current_sym_fields):
+    tbl_updates = {}
+    for fkey, final_v in final_sym_fields.items():
+        init_v = current_sym_fields.get(fkey)
+        final_smt, init_smt = None, None
+        try:
+            if isinstance(final_v, z3.ExprRef):
+                final_smt = simplify(final_v).sexpr()
+            if isinstance(init_v, z3.ExprRef):
+                init_smt = simplify(init_v).sexpr()
+            if final_smt != init_smt:
+                fstr = f"{fkey[0]}.{fkey[1]}"
+                if final_smt is not None:
+                    tbl_updates[fstr] = final_smt
+        except z3.Z3Exception:
+            if isinstance(final_v, z3.ExprRef) and isinstance(init_v, z3.ExprRef):
+                final_smt_nosimp = final_v.sexpr()
+                init_smt_nosimp = init_v.sexpr()
+                if final_smt_nosimp != init_smt_nosimp:
+                    fstr = f"{fkey[0]}.{fkey[1]}"
+                    tbl_updates[fstr] = final_smt_nosimp
+            elif isinstance(final_v, z3.ExprRef):
+                fstr = f"{fkey[0]}.{fkey[1]}"
+                tbl_updates[fstr] = final_v.sexpr()
+    return tbl_updates
+
+def _build_output_state(state, table_name, tbl_updates):
+    combined_updates = state.get("field_updates", {}).copy()
+    combined_updates.update(tbl_updates)
+    return {
+        "description": state.get("description", "???") + f" -> {table_name}",
+        "z3_constraints_smt2": state.get('z3_constraints_smt2', []),
+        "present_headers": state.get("present_headers", []),
+        "history": state.get("history", []) + [table_name],
+        "field_updates": combined_updates,
+    }
+
+def _run_egress_analysis_legacy(
+    *,
+    initial_states,
+    input_states_file,
+    switch_id,
+    table_name,
+    fields,
+    runtime_entries,
+    fsm_data,
+    target_table_def,
+    all_path_conditions,
+    action_defs,
+    fsm_field_widths,
+):
+    print(f"--- Carregados {len(initial_states)} estados de '{Path(input_states_file).name}' ---")
+    print(f"--- Analisando Egress '{table_name}' para SWITCH '{switch_id}' (legacy) ---")
+    output_states = []
+    decls = [f"(declare-const {v.sexpr()} (_ BitVec {v.sort().size()}))" for v in fields.values() if isinstance(v, z3.BitVecRef)]
+
+    for i, state in enumerate(initial_states):
+        print("\n" + "="*50 + f"\nAnalisando Estado Entrada #{i} ({state.get('description', 'No desc')})")
+
+        if not all_path_conditions:
+            print(f"  -> AVISO: Análise pulada. Pacote NUNCA alcançará a tabela '{table_name}'.")
+            continue
+
+        parser_constraints_smt2 = state.get('z3_constraints_smt2', [])
+        parser_asserts = [f"(assert {s})" for s in parser_constraints_smt2]
+        path_reachable = False
+        valid_path_conditions = None
+
+        for p_conds in all_path_conditions:
+            path_asserts = [f"(assert {c.sexpr()})" for c in p_conds] if p_conds else []
+            script = "\n".join(decls + parser_asserts + path_asserts)
+            reachability_solver = Solver()
+            try:
+                with suppress_c_stdout_stderr():
+                    reachability_solver.from_string(script)
+            except Exception as e:
+                print(f"  -> ERRO Z3: Falha SMT no reachability: {e}.")
+                continue
+            if reachability_solver.check() == sat:
+                path_reachable = True
+                valid_path_conditions = p_conds
+                break
+
+        if not path_reachable:
+            print(f"  -> AVISO: Análise pulada. Pacote NUNCA alcançará a tabela '{table_name}'.")
+            continue
+
+        analysis_solver = Solver()
+        chosen_path_asserts = [f"(assert {c.sexpr()})" for c in valid_path_conditions] if valid_path_conditions else []
+        main_script = "\n".join(decls + parser_asserts + chosen_path_asserts)
+        try:
+            with suppress_c_stdout_stderr():
+                analysis_solver.from_string(main_script)
+            if analysis_solver.check() == unsat:
+                print("  -> AVISO: Estado + Cond Egress INALCANÇÁVEIS.")
+                continue
+        except Exception as e:
+            print(f"  -> ERRO Z3: Falha SMT: {e}. Pulando.")
+            continue
+
+        current_sym_fields = fields.copy()
+        if "field_updates" in state:
+            z3_decls = {v.sexpr(): v for v in fields.values() if isinstance(v, z3.BitVecRef)}
+            for fstr, estr in state["field_updates"].items():
+                fkey = _state_field_key(fstr)
+                if not fkey or fkey not in current_sym_fields:
+                    continue
+                try:
+                    target_var = fields.get(fkey)
+                    if target_var is None:
+                        continue
+                    with suppress_c_stdout_stderr():
+                        current_sym_fields[fkey] = parse_field_update_expr(estr, decls=z3_decls, target_var=target_var)
+                except Exception as e:
+                    print(f"Erro parse SMT field_update '{fstr}': {e}")
+
+        final_sym_fields = execute_symbolic_table_egress(
+            target_table_def, current_sym_fields, runtime_entries, fsm_data, action_defs, fsm_field_widths
+        )
+        tbl_updates = _extract_table_updates(final_sym_fields, current_sym_fields)
+        output_states.append(_build_output_state(state, table_name, tbl_updates))
+        print(f"  -> Estado saida gerado com {len(tbl_updates)} atualizacoes.")
+    return output_states
+
+def _run_egress_analysis_incremental(
+    *,
+    initial_states,
+    input_states_file,
+    switch_id,
+    table_name,
+    fields,
+    runtime_entries,
+    fsm_data,
+    target_table_def,
+    all_path_conditions,
+    action_defs,
+    fsm_field_widths,
+):
+    print(f"--- Carregados {len(initial_states)} estados de '{Path(input_states_file).name}' ---")
+    print(f"--- Analisando Egress '{table_name}' para SWITCH '{switch_id}' (incremental) ---")
+    output_states = []
+
+    if not all_path_conditions:
+        print(f"AVISO: Tabela '{table_name}' inalcançável no egress.")
+        return output_states
+
+    decls = {v.sexpr(): v for v in fields.values() if isinstance(v, z3.BitVecRef)}
+    parser_constraint_cache = {}
+    field_update_cache = {}
+    path_condition_exprs = [And(*p_conds) if p_conds else BoolVal(True) for p_conds in all_path_conditions]
+    if len(path_condition_exprs) > 1:
+        path_disjunction_expr = Or(*path_condition_exprs)
+    elif len(path_condition_exprs) == 1:
+        path_disjunction_expr = path_condition_exprs[0]
+    else:
+        path_disjunction_expr = None
+
+    for i, state in enumerate(initial_states):
+        print("\n" + "="*50 + f"\nAnalisando Estado Entrada #{i} ({state.get('description', 'No desc')})")
+        parser_constraints_smt2 = state.get('z3_constraints_smt2', [])
+
+        try:
+            parser_constraints = _parse_state_constraints(parser_constraints_smt2, decls, parser_constraint_cache)
+        except Exception as e:
+            print(f"  -> ERRO Z3: Falha parse constraints SMT: {e}. Pulando.")
+            continue
+
+        reachability_solver = Solver()
+        if parser_constraints:
+            reachability_solver.add(*parser_constraints)
+        if path_disjunction_expr is not None:
+            reachability_solver.add(path_disjunction_expr)
+
+        if reachability_solver.check() != sat:
+            print(f"  -> AVISO: Análise pulada. Pacote NUNCA alcançará a tabela '{table_name}'.")
+            continue
+
+        valid_path_conditions = _pick_path_from_model(reachability_solver.model(), all_path_conditions)
+        if valid_path_conditions is None:
+            valid_path_conditions = []
+        print("  -> OK: A tabela é alcançável via um caminho válido.")
+
+        analysis_solver = Solver()
+        if parser_constraints:
+            analysis_solver.add(*parser_constraints)
+        if valid_path_conditions:
+            analysis_solver.add(*valid_path_conditions)
+        if analysis_solver.check() == unsat:
+            print("  -> AVISO: Estado + caminho selecionado ficou UNSAT.")
+            continue
+
+        current_sym_fields = _load_state_symbolic_fields(state, fields, decls, field_update_cache)
+        final_sym_fields = execute_symbolic_table_egress(
+            target_table_def, current_sym_fields, runtime_entries, fsm_data, action_defs, fsm_field_widths
+        )
+
+        tbl_updates = _extract_table_updates(final_sym_fields, current_sym_fields)
+        output_states.append(_build_output_state(state, table_name, tbl_updates))
+        print(f"  -> Estado saida gerado com {len(tbl_updates)} atualizacoes.")
+    return output_states
+
 # --- Ponto de Entrada Principal ---
 if __name__ == "__main__":
     if len(sys.argv) != 7:
@@ -529,111 +968,129 @@ if __name__ == "__main__":
         exit(1)
     fsm_file, config_file, input_states_file, switch_id, table_name, output_states_file = sys.argv[1:7]
 
+    solver_mode = _normalize_solver_mode(os.getenv("P4SYMTEST_SOLVER_MODE", "incremental"))
+    validate_equivalence = _env_flag("P4SYMTEST_SOLVER_VALIDATE", default=False)
+    validate_fail_on_mismatch = _env_flag("P4SYMTEST_SOLVER_VALIDATE_FAIL_ON_MISMATCH", default=False)
+    fallback_to_legacy = _env_flag("P4SYMTEST_SOLVER_FALLBACK_LEGACY", default=True)
+    fallback_on_mismatch = _env_flag("P4SYMTEST_SOLVER_FALLBACK_ON_MISMATCH", default=True)
+    print(f"[solver-egress] mode={solver_mode} validate={int(validate_equivalence)} fallback_legacy={int(fallback_to_legacy)}")
+
     fsm_data = load_json(fsm_file)
     runtime_entries_all = load_json(config_file)
     initial_states = load_json(input_states_file)
     runtime_entries = runtime_entries_all.get(switch_id, {})
 
-    # Cache de bitwidths
     fsm_field_widths = {}
     header_types = {ht['name']: ht for ht in fsm_data.get('header_types', [])}
     for h in fsm_data.get('headers', []):
-        h_name = h.get('name'); ht_name = h.get('header_type')
-        if not h_name or not ht_name or ht_name not in header_types: continue
+        h_name = h.get('name')
+        ht_name = h.get('header_type')
+        if not h_name or not ht_name or ht_name not in header_types:
+            continue
         for f_info in header_types[ht_name].get('fields', []):
-            if len(f_info)>=2: f_name,f_width=f_info[0],f_info[1]
-            if isinstance(f_name,str) and isinstance(f_width,int): fsm_field_widths[(h_name,f_name)]=f_width
-    if ('standard_metadata','egress_spec') not in fsm_field_widths: fsm_field_widths[('standard_metadata','egress_spec')]=9
+            if len(f_info) >= 2:
+                f_name, f_width = f_info[0], f_info[1]
+                if isinstance(f_name, str) and isinstance(f_width, int):
+                    fsm_field_widths[(h_name, f_name)] = f_width
+    if ('standard_metadata', 'egress_spec') not in fsm_field_widths:
+        fsm_field_widths[('standard_metadata', 'egress_spec')] = 9
 
-
-    # Cria campos Z3
-    fields = {}; all_hdr_names = [h.get('name') for h in fsm_data.get('headers',[]) if h.get('name')]
+    fields = {}
+    all_hdr_names = [h.get('name') for h in fsm_data.get('headers', []) if h.get('name')]
     for h_name in all_hdr_names:
-        if h_name == 'scalars': continue
-        key_valid = (h_name, '$valid$'); fields[key_valid] = BitVec(f"{h_name}.$valid$", 1)
-        for (h,f), w in fsm_field_widths.items():
-             if h == h_name: fields[(h,f)] = BitVec(f"{h}.{f}", w)
-    if ('standard_metadata','$valid$') not in fields:
-        fields[('standard_metadata','$valid$')] = BitVec("standard_metadata.$valid$", 1)
-        if ('standard_metadata','egress_spec') in fsm_field_widths:
-             w = fsm_field_widths[('standard_metadata','egress_spec')]
-             fields[('standard_metadata','egress_spec')] = BitVec("standard_metadata.egress_spec", w)
-
+        if h_name == 'scalars':
+            continue
+        fields[(h_name, '$valid$')] = BitVec(f"{h_name}.$valid$", 1)
+        for (h, f), w in fsm_field_widths.items():
+            if h == h_name:
+                fields[(h, f)] = BitVec(f"{h}.{f}", w)
+    if ('standard_metadata', '$valid$') not in fields:
+        fields[('standard_metadata', '$valid$')] = BitVec("standard_metadata.$valid$", 1)
+        if ('standard_metadata', 'egress_spec') in fsm_field_widths:
+            w = fsm_field_widths[('standard_metadata', 'egress_spec')]
+            fields[('standard_metadata', 'egress_spec')] = BitVec("standard_metadata.egress_spec", w)
 
     action_defs = {a['name']: a for a in fsm_data.get('actions', [])}
-    egress_pipeline = next((p for p in fsm_data.get('pipelines',[]) if p.get('name')=='egress'),None)
-    if not egress_pipeline: print("Erro: Pipeline 'egress' não encontrado."); exit(1)
-    target_table_def = next((t for t in egress_pipeline.get('tables',[]) if t.get('name')==table_name),None)
-    if not target_table_def: print(f"Erro: Tabela '{table_name}' não encontrada."); exit(1)
+    egress_pipeline = next((p for p in fsm_data.get('pipelines', []) if p.get('name') == 'egress'), None)
+    if not egress_pipeline:
+        print("Erro: Pipeline 'egress' não encontrado.")
+        exit(1)
+    target_table_def = next((t for t in egress_pipeline.get('tables', []) if t.get('name') == table_name), None)
+    if not target_table_def:
+        print(f"Erro: Tabela '{table_name}' não encontrada.")
+        exit(1)
 
     print(f"Calculando caminho Egress até '{table_name}'...")
     _path_cache.clear()
-    path_conditions = find_path_to_table(egress_pipeline, egress_pipeline.get("init_table"), table_name, set(), fields)
-    if path_conditions is None: print(f"AVISO: Tabela '{table_name}' inalcançável.")
+    _all_paths_cache.clear()
+    all_path_conditions = find_paths_to_table(egress_pipeline, egress_pipeline.get("init_table"), table_name, set(), fields)
+    if not all_path_conditions:
+        print(f"AVISO: Tabela '{table_name}' inalcançável (all paths).")
 
-    print(f"--- Carregados {len(initial_states)} estados de '{Path(input_states_file).name}' ---")
-    print(f"--- Analisando Egress '{table_name}' para SWITCH '{switch_id}' ---")
-    output_states = []; analysis_solver = Solver()
+    common_kwargs = dict(
+        initial_states=initial_states,
+        input_states_file=input_states_file,
+        switch_id=switch_id,
+        table_name=table_name,
+        fields=fields,
+        runtime_entries=runtime_entries,
+        fsm_data=fsm_data,
+        target_table_def=target_table_def,
+        action_defs=action_defs,
+        fsm_field_widths=fsm_field_widths,
+    )
 
-    for i, state in enumerate(initial_states):
-        print("\n" + "="*50 + f"\nAnalisando Estado Entrada #{i} ({state.get('description','No desc')})")
-        analysis_solver.reset()
-        decls=[f"(declare-const {v.sexpr()} (_ BitVec {v.sort().size()}))" for v in fields.values() if isinstance(v, z3.BitVecRef)] # So declara BitVecs
-        p_asserts=[f"(assert {s})" for s in state.get('z3_constraints_smt2',[])]
-        path_asserts=[f"(assert {c.sexpr()})" for c in path_conditions] if path_conditions else []
-        script="\n".join(decls+p_asserts+path_asserts)
+    output_states = None
+    legacy_states = None
+    incremental_states = None
+
+    if solver_mode == "legacy":
+        legacy_states = _run_egress_analysis_legacy(all_path_conditions=all_path_conditions, **common_kwargs)
+        output_states = legacy_states
+        if validate_equivalence:
+            incremental_states = _run_egress_analysis_incremental(all_path_conditions=all_path_conditions, **common_kwargs)
+            eq, message = _compare_state_outputs(legacy_states, incremental_states)
+            print(f"[solver-egress][validate] {message}")
+            if not eq and validate_fail_on_mismatch:
+                with open(output_states_file, 'w', encoding='utf-8') as f:
+                    json.dump(output_states, f, indent=2)
+                exit(2)
+    else:
+        incremental_error = None
         try:
-            with suppress_c_stdout_stderr(): analysis_solver.from_string(script)
-            if analysis_solver.check() == unsat: print("  -> AVISO: Estado + Cond Egress INALCANÇÁVEIS."); continue
-        except Exception as e: print(f"  -> ERRO Z3: Falha SMT: {e}. Pulando."); continue
+            incremental_states = _run_egress_analysis_incremental(all_path_conditions=all_path_conditions, **common_kwargs)
+            output_states = incremental_states
+        except Exception as e:
+            incremental_error = e
+            print(f"[solver-egress] incremental falhou: {e}")
 
-        current_sym_fields = fields.copy()
-        if "field_updates" in state:
-            z3_decls = {v.sexpr(): v for k,v in fields.items() if isinstance(v, z3.BitVecRef)} # So BitVecs
-            for fstr, estr in state["field_updates"].items():
-                parts=fstr.split('.'); fkey=tuple(parts) if len(parts)==2 else (parts[1],parts[2]) if len(parts)==3 else None
-                if fkey and fkey in current_sym_fields:
-                    try:
-                        target_var = fields.get(fkey)
-                        if target_var is None:
-                            continue
-                        with suppress_c_stdout_stderr():
-                            current_sym_fields[fkey] = parse_field_update_expr(estr, decls=z3_decls, target_var=target_var)
-                    except Exception as e: print(f"Erro parse SMT field_update '{fstr}': {e}")
+        if incremental_error is not None and fallback_to_legacy:
+            print("[solver-egress] fallback para modo legacy.")
+            legacy_states = _run_egress_analysis_legacy(all_path_conditions=all_path_conditions, **common_kwargs)
+            output_states = legacy_states
+        elif incremental_error is not None:
+            raise incremental_error
 
-        final_sym_fields = execute_symbolic_table_egress(
-             target_table_def, current_sym_fields, runtime_entries, fsm_data, action_defs, fsm_field_widths
-        )
-
-        tbl_updates = {}
-        for fkey, final_v in final_sym_fields.items():
-            init_v = current_sym_fields.get(fkey); final_smt, init_smt = None, None
-            try:
-                if isinstance(final_v, z3.ExprRef): final_smt = simplify(final_v).sexpr()
-                if isinstance(init_v, z3.ExprRef): init_smt = simplify(init_v).sexpr()
-                if final_smt != init_smt:
-                    fstr=f"{fkey[0]}.{fkey[1]}";
-                    if final_smt is not None: tbl_updates[fstr] = final_smt
-            except z3.Z3Exception:
-                 if isinstance(final_v, z3.ExprRef) and isinstance(init_v, z3.ExprRef):
-                     final_smt_nosimp = final_v.sexpr(); init_smt_nosimp = init_v.sexpr()
-                     if final_smt_nosimp != init_smt_nosimp: fstr=f"{fkey[0]}.{fkey[1]}"; tbl_updates[fstr] = final_smt_nosimp
-                 elif isinstance(final_v, z3.ExprRef): fstr=f"{fkey[0]}.{fkey[1]}"; tbl_updates[fstr] = final_v.sexpr()
-
-        combined_updates = state.get("field_updates",{}).copy(); combined_updates.update(tbl_updates)
-        new_state = {
-            "description": state.get("description","???") + f" -> {table_name}",
-            "z3_constraints_smt2": state.get('z3_constraints_smt2',[]),
-            "present_headers": state.get("present_headers",[]),
-            "history": state.get("history",[]) + [table_name],
-            "field_updates": combined_updates
-        }
-        output_states.append(new_state)
-        print(f"  -> Estado saida gerado com {len(tbl_updates)} atualizacoes.")
+        if validate_equivalence and incremental_states is not None:
+            legacy_states = _run_egress_analysis_legacy(all_path_conditions=all_path_conditions, **common_kwargs)
+            eq, message = _compare_state_outputs(incremental_states, legacy_states)
+            print(f"[solver-egress][validate] {message}")
+            if not eq and fallback_on_mismatch:
+                print("[solver-egress][validate] divergência detectada, escrevendo saída legacy por segurança.")
+                output_states = legacy_states
+            if not eq and validate_fail_on_mismatch:
+                with open(output_states_file, 'w', encoding='utf-8') as f:
+                    json.dump(output_states, f, indent=2)
+                exit(2)
 
     out_path = Path(output_states_file)
+    if output_states is None:
+        output_states = []
     try:
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(out_path, 'w', encoding='utf-8') as f: json.dump(output_states, f, indent=2)
+        with open(out_path, 'w', encoding='utf-8') as f:
+            json.dump(output_states, f, indent=2)
         print(f"\nAnalise Egress concluida. {len(output_states)} estados salvos em '{out_path.name}'.")
-    except Exception as e: print(f"\nErro ao salvar '{out_path.name}': {e}"); exit(1)
+    except Exception as e:
+        print(f"\nErro ao salvar '{out_path.name}': {e}")
+        exit(1)
