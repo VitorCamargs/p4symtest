@@ -244,6 +244,8 @@ class BenchmarkMenuRunner:
     def __init__(self) -> None:
         ensure_required_paths()
         OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
+        # Silence helper module prints (TableOptimizer/DeparserOptimizer) to reduce stdout overhead.
+        os.environ["P4SYMTEST_BENCH_QUIET"] = "1"
         self.compact_logs = COMPACT_LOGS
         self.generator = SyntheticP4Generator(seed=42)
         self._optimized_helpers_checked = False
@@ -265,9 +267,6 @@ class BenchmarkMenuRunner:
             return self._optimized_helpers_available
 
         self._optimized_helpers_checked = True
-        # Keep optimized helper logs quiet by default in the interactive benchmark.
-        # Users can override by exporting P4SYMTEST_BENCH_QUIET=0.
-        os.environ.setdefault("P4SYMTEST_BENCH_QUIET", "1")
 
         if not DEPARSE_OPTIMIZER_MODULE.exists():
             print(f"[WARN] Optimized mode unavailable: module not found: {DEPARSE_OPTIMIZER_MODULE}")
