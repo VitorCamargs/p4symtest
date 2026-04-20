@@ -8,9 +8,20 @@ o mesmo resultado simbólico, evitando processamento redundante.
 
 import json
 import hashlib
+import os
 from typing import List, Dict, Any, Tuple, Set
 from collections import defaultdict
 from pathlib import Path
+
+
+def _is_quiet() -> bool:
+    raw = os.environ.get("P4SYMTEST_BENCH_QUIET", "0").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _vprint(*args: Any, **kwargs: Any) -> None:
+    if not _is_quiet():
+        print(*args, **kwargs)
 
 
 class TableExecutionCache:
@@ -42,9 +53,9 @@ class TableExecutionCache:
                     k: set(tuple(x) for x in v) 
                     for k, v in data.get('relevant_fields', {}).items()
                 }
-            print(f"[TableCache] Cache carregado: {len(self.cache)} entradas")
+            _vprint(f"[TableCache] Cache carregado: {len(self.cache)} entradas")
         except Exception as e:
-            print(f"[TableCache] Erro ao carregar cache: {e}")
+            _vprint(f"[TableCache] Erro ao carregar cache: {e}")
     
     def save_cache(self):
         """Salva cache em disco"""
@@ -70,9 +81,9 @@ class TableExecutionCache:
             with open(self.cache_file, 'w') as f:
                 json.dump(data, f, indent=2)
             
-            print(f"[TableCache] Cache salvo: {len(self.cache)} entradas")
+            _vprint(f"[TableCache] Cache salvo: {len(self.cache)} entradas")
         except Exception as e:
-            print(f"[TableCache] Erro ao salvar cache: {e}")
+            _vprint(f"[TableCache] Erro ao salvar cache: {e}")
     
     def _extract_relevant_fields(self, table_def: Dict, fsm_data: Dict) -> Set[Tuple[str, str]]:
         """
@@ -244,8 +255,8 @@ def optimize_table_input(
         - unique_states: estados únicos para processar
         - index_mapping: {original_idx: hash} para reconstrução
     """
-    print(f"\n[TableOptimizer] Otimizando entrada para '{table_name}'...")
-    print(f"                 Estados originais: {len(states)}")
+    _vprint(f"\n[TableOptimizer] Otimizando entrada para '{table_name}'...")
+    _vprint(f"                 Estados originais: {len(states)}")
     
     # Extrai campos relevantes
     if table_name not in cache.table_relevant_fields:
@@ -279,10 +290,10 @@ def optimize_table_input(
             index_mapping[orig_idx] = state_hash
     
     reduction = 1 - (len(unique_states) / len(states))
-    print(f"[TableOptimizer] ✓ Otimização concluída:")
-    print(f"                 {len(states)} → {len(unique_states)} estados")
-    print(f"                 Redução: {reduction*100:.1f}%")
-    print(f"                 Economia: {len(states) - len(unique_states)} execuções")
+    _vprint(f"[TableOptimizer] ✓ Otimização concluída:")
+    _vprint(f"                 {len(states)} → {len(unique_states)} estados")
+    _vprint(f"                 Redução: {reduction*100:.1f}%")
+    _vprint(f"                 Economia: {len(states) - len(unique_states)} execuções")
     
     return unique_states, index_mapping
 
@@ -296,7 +307,7 @@ def expand_table_results(
     """
     Expande resultados da tabela para todos os estados originais.
     """
-    print(f"\n[TableOptimizer] Expandindo {len(results)} resultados...")
+    _vprint(f"\n[TableOptimizer] Expandindo {len(results)} resultados...")
     
     expanded = []
     
@@ -320,7 +331,7 @@ def expand_table_results(
             # Fallback: mantém estado original
             expanded.append(state)
     
-    print(f"[TableOptimizer] ✓ Expansão concluída: {len(expanded)} resultados")
+    _vprint(f"[TableOptimizer] ✓ Expansão concluída: {len(expanded)} resultados")
     
     return expanded
 
@@ -330,7 +341,7 @@ if __name__ == "__main__":
     import sys
     
     if len(sys.argv) != 5:
-        print("Uso: python3 table_execution_cache.py <fsm.json> <table_name> <input_states.json> <cache.json>")
+        _vprint("Uso: python3 table_execution_cache.py <fsm.json> <table_name> <input_states.json> <cache.json>")
         sys.exit(1)
     
     fsm_file = Path(sys.argv[1])
@@ -348,12 +359,12 @@ if __name__ == "__main__":
     # Encontra definição da tabela
     ingress = next((p for p in fsm_data.get('pipelines', []) if p['name'] == 'ingress'), None)
     if not ingress:
-        print("Pipeline ingress não encontrado")
+        _vprint("Pipeline ingress não encontrado")
         sys.exit(1)
     
     table_def = next((t for t in ingress.get('tables', []) if t['name'] == table_name), None)
     if not table_def:
-        print(f"Tabela '{table_name}' não encontrada")
+        _vprint(f"Tabela '{table_name}' não encontrada")
         sys.exit(1)
     
     # Inicializa cache
@@ -364,10 +375,10 @@ if __name__ == "__main__":
         states, table_name, table_def, fsm_data, cache
     )
     
-    print(f"\n[Info] Processar {len(unique_states)} estados únicos")
-    print(f"[Info] Economizando {len(states) - len(unique_states)} execuções redundantes")
+    _vprint(f"\n[Info] Processar {len(unique_states)} estados únicos")
+    _vprint(f"[Info] Economizando {len(states) - len(unique_states)} execuções redundantes")
     
     # Salva cache
     cache.save_cache()
     
-    print(f"\n[Stats] Cache: {cache.get_stats()}")
+    _vprint(f"\n[Stats] Cache: {cache.get_stats()}")

@@ -8,9 +8,20 @@ depois expande os resultados para todos os caminhos originais.
 
 import json
 import hashlib
+import os
 from typing import List, Dict, Any, Tuple
 from collections import defaultdict
 from pathlib import Path
+
+
+def _is_quiet() -> bool:
+    raw = os.environ.get("P4SYMTEST_BENCH_QUIET", "0").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _vprint(*args: Any, **kwargs: Any) -> None:
+    if not _is_quiet():
+        print(*args, **kwargs)
 
 
 class DeparserStateOptimizer:
@@ -42,7 +53,7 @@ class DeparserStateOptimizer:
         
         Returns: (estados_representativos, mapa_de_otimização)
         """
-        print(f"\n[Optimizer] Iniciando otimização de {len(states)} estados...")
+        _vprint(f"\n[Optimizer] Iniciando otimização de {len(states)} estados...")
         
         # Agrupa por hash
         for idx, state in enumerate(states):
@@ -74,10 +85,10 @@ class DeparserStateOptimizer:
         reduction_pct = optimization_map['reduction_ratio'] * 100
         saved_states = len(states) - len(self.representative_states)
         
-        print(f"[Optimizer] ✓ Otimização concluída:")
-        print(f"            {len(states)} → {len(self.representative_states)} estados")
-        print(f"            Redução: {reduction_pct:.1f}%")
-        print(f"            Economia: {saved_states} estados")
+        _vprint(f"[Optimizer] ✓ Otimização concluída:")
+        _vprint(f"            {len(states)} → {len(self.representative_states)} estados")
+        _vprint(f"            Redução: {reduction_pct:.1f}%")
+        _vprint(f"            Economia: {saved_states} estados")
         
         return self.representative_states, optimization_map
     
@@ -87,7 +98,7 @@ class DeparserStateOptimizer:
         Expande resultados do deparser para todos os estados originais,
         restaurando history e metadados de cada caminho.
         """
-        print(f"\n[Optimizer] Expandindo {len(deparser_results)} resultados...")
+        _vprint(f"\n[Optimizer] Expandindo {len(deparser_results)} resultados...")
         
         original_states = optimization_map['original_states']
         hash_to_indices = optimization_map['hash_to_indices']
@@ -132,9 +143,9 @@ class DeparserStateOptimizer:
                 
                 expanded_results.append(expanded_result)
         
-        print(f"[Optimizer] ✓ Expansão concluída:")
-        print(f"            {len(deparser_results)} → {len(expanded_results)} resultados")
-        print(f"            Todos os caminhos originais restaurados")
+        _vprint(f"[Optimizer] ✓ Expansão concluída:")
+        _vprint(f"            {len(deparser_results)} → {len(expanded_results)} resultados")
+        _vprint(f"            Todos os caminhos originais restaurados")
         
         return expanded_results
 
@@ -164,9 +175,9 @@ def optimize_and_process_deparser(all_final_states: List[Dict],
     with open(opt_map_file, 'w') as f:
         json.dump(opt_map_save, f, indent=2)
     
-    print(f"[Optimizer] Arquivos salvos:")
-    print(f"            - Estados otimizados: {optimized_file}")
-    print(f"            - Mapa de otimização: {opt_map_file}")
+    _vprint(f"[Optimizer] Arquivos salvos:")
+    _vprint(f"            - Estados otimizados: {optimized_file}")
+    _vprint(f"            - Mapa de otimização: {opt_map_file}")
     
     return optimized_file, opt_map
 
@@ -190,7 +201,7 @@ def expand_deparser_results(deparser_output_file: Path,
     with open(expanded_file, 'w') as f:
         json.dump(expanded_results, f, indent=2)
     
-    print(f"[Optimizer] Resultados expandidos salvos: {expanded_file}")
+    _vprint(f"[Optimizer] Resultados expandidos salvos: {expanded_file}")
     
     return expanded_file
 
@@ -200,7 +211,7 @@ if __name__ == "__main__":
     import sys
     
     if len(sys.argv) != 4:
-        print("Uso: python3 deparser_optimizer.py <input_states.json> <deparser_results.json> <output_expanded.json>")
+        _vprint("Uso: python3 deparser_optimizer.py <input_states.json> <deparser_results.json> <output_expanded.json>")
         sys.exit(1)
     
     input_file = Path(sys.argv[1])
@@ -215,7 +226,7 @@ if __name__ == "__main__":
     optimizer = DeparserStateOptimizer()
     optimized_states, opt_map = optimizer.optimize_states(original_states)
     
-    print(f"\n[Info] Estados otimizados salvos temporariamente para processamento...")
+    _vprint(f"\n[Info] Estados otimizados salvos temporariamente para processamento...")
     
     # Carrega resultados do deparser
     with open(deparser_file, 'r') as f:
@@ -228,4 +239,4 @@ if __name__ == "__main__":
     with open(output_file, 'w') as f:
         json.dump(expanded_results, f, indent=2)
     
-    print(f"\n[Success] Resultados expandidos salvos em: {output_file}")
+    _vprint(f"\n[Success] Resultados expandidos salvos em: {output_file}")

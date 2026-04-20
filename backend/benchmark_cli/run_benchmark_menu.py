@@ -233,6 +233,9 @@ class BenchmarkMenuRunner:
             return self._optimized_helpers_available
 
         self._optimized_helpers_checked = True
+        # Keep optimized helper logs quiet by default in the interactive benchmark.
+        # Users can override by exporting P4SYMTEST_BENCH_QUIET=0.
+        os.environ.setdefault("P4SYMTEST_BENCH_QUIET", "1")
 
         if not DEPARSE_OPTIMIZER_MODULE.exists():
             print(f"[WARN] Optimized mode unavailable: module not found: {DEPARSE_OPTIMIZER_MODULE}")
