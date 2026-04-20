@@ -4,6 +4,7 @@ import sys
 import z3
 from z3 import BoolVal, BitVecVal, BitVec, And, Or, Not, If, Solver, sat, unsat, is_false, Extract, ZeroExt, BitVecSort, parse_smt2_string, simplify, UGT, ULT, UGE, ULE
 import os
+from collections import Counter
 from contextlib import contextmanager
 
 # --- Funções Auxiliares ---
@@ -83,6 +84,108 @@ def parse_field_update_expr(expr_str, decls, target_var):
     else:
         raise ValueError("Could not isolate field-update expression with matching sort")
     return candidate
+
+def _env_flag(name, default=False):
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {'1', 'true', 'yes', 'on', 'y'}
+
+def _normalize_solver_mode(value):
+    if value is None:
+        return "incremental"
+    mode = value.strip().lower()
+    if mode in {"incremental", "legacy"}:
+        return mode
+    return "incremental"
+
+def _state_field_key(field_str):
+    parts = field_str.split('.')
+    if len(parts) == 2:
+        return tuple(parts)
+    if len(parts) == 3:
+        return (parts[1], parts[2])
+    return None
+
+def _parse_assertion_expr(expr_smt2, decls, parse_cache):
+    if expr_smt2 in parse_cache:
+        return parse_cache[expr_smt2]
+    wrapped = f"(assert {expr_smt2})"
+    with suppress_c_stdout_stderr():
+        parsed = parse_smt2_string(wrapped, decls=decls)
+    if isinstance(parsed, z3.AstVector):
+        if len(parsed) != 1:
+            raise ValueError(f"SMT assertion produced {len(parsed)} assertions (expected 1)")
+        parsed = parsed[0]
+    if not isinstance(parsed, z3.BoolRef):
+        raise ValueError(f"SMT assertion is not BoolRef: {type(parsed).__name__}")
+    parse_cache[expr_smt2] = parsed
+    return parsed
+
+def _parse_state_constraints(parser_constraints_smt2, decls, parse_cache):
+    parsed_constraints = []
+    for expr_smt2 in parser_constraints_smt2:
+        parsed_constraints.append(_parse_assertion_expr(expr_smt2, decls, parse_cache))
+    return parsed_constraints
+
+def _load_state_symbolic_fields(state, fields, decls, field_update_cache):
+    current_symbolic_fields = fields.copy()
+    for field_str, expr_str in state.get("field_updates", {}).items():
+        field_key = _state_field_key(field_str)
+        if not field_key or field_key not in current_symbolic_fields:
+            continue
+        target_var = fields.get(field_key)
+        if target_var is None:
+            continue
+        cache_key = (field_key[0], field_key[1], expr_str)
+        if cache_key in field_update_cache:
+            current_symbolic_fields[field_key] = field_update_cache[cache_key]
+            continue
+        try:
+            parsed_expr = parse_field_update_expr(expr_str, decls=decls, target_var=target_var)
+            field_update_cache[cache_key] = parsed_expr
+            current_symbolic_fields[field_key] = parsed_expr
+        except Exception as e:
+            print(f"Erro ao parsear SMT para {field_str}: {e}")
+    return current_symbolic_fields
+
+def _pick_path_from_model(model, all_path_conditions):
+    if not all_path_conditions:
+        return None
+    for p_conds in all_path_conditions:
+        if not p_conds:
+            return p_conds
+        try:
+            cond_eval = model.eval(And(*p_conds), model_completion=True)
+            if z3.is_true(cond_eval):
+                return p_conds
+        except Exception:
+            continue
+    return all_path_conditions[0]
+
+def _add_unique_constraint_string(constraints, expr):
+    expr_smt = expr.sexpr()
+    if expr_smt not in constraints:
+        constraints.append(expr_smt)
+
+def _compare_state_outputs(states_a, states_b):
+    norm_a = [json.dumps(st, sort_keys=True, ensure_ascii=False) for st in states_a]
+    norm_b = [json.dumps(st, sort_keys=True, ensure_ascii=False) for st in states_b]
+    if len(norm_a) != len(norm_b):
+        return False, f"state count mismatch: {len(norm_a)} vs {len(norm_b)}"
+    counter_a = Counter(norm_a)
+    counter_b = Counter(norm_b)
+    if counter_a == counter_b:
+        return True, "outputs are equivalent"
+    missing = counter_a - counter_b
+    extra = counter_b - counter_a
+    if missing:
+        first_missing = next(iter(missing))
+        return False, f"missing state in second output: {first_missing[:220]}"
+    if extra:
+        first_extra = next(iter(extra))
+        return False, f"extra state in second output: {first_extra[:220]}"
+    return False, "outputs differ"
 
 # --- LÓGICA DE ANÁLISE DE FLUXO DE CONTROLE ---
 def _field_key_from_node_value(field_val):
@@ -534,101 +637,53 @@ def execute_symbolic_table(table_def, current_fields, runtime_entries, fsm_data)
                  next_fields[field_key] = final_expr 
     return next_fields
 
-# --- Ponto de Entrada Principal ---
-if __name__ == "__main__":
-    if len(sys.argv) != 8:
-        print("Uso: python3 run_table.py <fsm.json> <topology.json> <runtime_config.json> <estados_entrada.json> <switch_id> <nome_da_tabela> <estados_saida.json>")
-        exit(1)
-    
-    fsm_file = sys.argv[1]
-    topology_file = sys.argv[2]
-    config_file = sys.argv[3]
-    input_states_file = sys.argv[4]
-    switch_id = sys.argv[5]
-    table_name = sys.argv[6]
-    output_states_file = sys.argv[7]
-
-    fsm_data = load_json(fsm_file)
-    topology_data = load_json(topology_file)
-    runtime_entries_all = load_json(config_file)
-    initial_states = load_json(input_states_file)
-    runtime_entries = runtime_entries_all.get(switch_id, {})
-    
-    # Cria campos Z3
-    fields = {}
-    header_types = {ht['name']: ht for ht in fsm_data.get('header_types', [])}
-    
-    for h in fsm_data.get('headers', []):
-        ht_name = h.get('header_type')
-        h_name = h.get('name')
-        if not h_name: continue
-
-        if ht_name and ht_name in header_types:
-            for f_info in header_types[ht_name].get('fields', []):
-                if len(f_info) >= 2:
-                     f_name, f_width = f_info[0], f_info[1]
-                     if isinstance(f_name, str) and isinstance(f_width, int) and f_width > 0:
-                         field_full_name = f"{h_name}.{f_name}"
-                         fields[(h_name, f_name)] = BitVec(field_full_name, f_width)
-        
-        if h_name != 'scalars':
-            valid_field_name = f"{h_name}.$valid$"
-            fields[(h_name, '$valid$')] = BitVec(valid_field_name, 1)
-    
-    # Constrói mapa de topologia ... (codigo omitido para brevidade, sem alteracoes)
-    ip_to_host_map = {h_info['ip']: h_id for h_id, h_info in topology_data.get('hosts', {}).items()}
-    port_to_destination_map = {}
-    current_switch_info = topology_data.get('switches', {}).get(switch_id, {})
-    for h_id, h_info in topology_data.get('hosts', {}).items():
-        if h_info.get('conectado_a', '').startswith(switch_id):
-            port_name = h_info['conectado_a']; port_num = current_switch_info.get('portas', {}).get(port_name)
-            if port_num: port_to_destination_map[port_num] = f"host {h_id} (direta)"
-    for link in topology_data.get('links', []):
-        if link.get('from', '').startswith(switch_id):
-            port_name = link['from']; dest_switch = link.get('to', 'N/A').split('-')[0]
-            port_num = current_switch_info.get('portas', {}).get(port_name)
-            if port_num: port_to_destination_map[port_num] = f"switch {dest_switch}"
-        elif link.get('to', '').startswith(switch_id):
-            port_name = link['to']; dest_switch = link.get('from', 'N/A').split('-')[0]
-            port_num = current_switch_info.get('portas', {}).get(port_name)
-            if port_num: port_to_destination_map[port_num] = f"switch {dest_switch}"
-
-    ingress_pipeline = next((p for p in fsm_data.get('pipelines',[]) if p.get('name') == 'ingress'), None)
-    if not ingress_pipeline: print("Erro: Pipeline 'ingress' não encontrado."); exit(1)
-
-    print(f"Calculando caminho do pipeline até a tabela '{table_name}'...")
-    _path_cache.clear()
-    all_path_conditions = find_paths_to_table(ingress_pipeline, ingress_pipeline.get('init_table'), table_name, set(), fields)
-    if not all_path_conditions: print(f"AVISO: A tabela '{table_name}' parece ser estruturalmente inalcançável.")
-
+def _run_table_analysis_legacy(
+    *,
+    initial_states,
+    input_states_file,
+    table_name,
+    switch_id,
+    fields,
+    runtime_entries,
+    fsm_data,
+    ingress_pipeline,
+    all_path_conditions,
+    ip_to_host_map,
+    port_to_destination_map,
+):
     print(f"--- Carregados {len(initial_states)} estados de '{input_states_file}' ---")
-    print(f"--- Executando análise modular da tabela '{table_name}' para o SWITCH '{switch_id}' ---")
-    
+    print(f"--- Executando análise modular da tabela '{table_name}' para o SWITCH '{switch_id}' (legacy) ---")
+
     output_states = []
+    declarations_smt2 = [f"(declare-const {var.sexpr()} (_ BitVec {var.sort().size()}))" for var in fields.values()]
+    target_table_def = next((t for t in ingress_pipeline.get('tables', []) if t['name'] == table_name), None)
+    if not target_table_def:
+        print(f"Erro: Definição da tabela '{table_name}' não encontrada.")
+        return output_states
+
     for i, state in enumerate(initial_states):
         print("\n" + "="*50)
         print(f"Analisando para o Estado de Entrada #{i} ({state.get('description', 'Sem desc')})")
 
         parser_constraints_smt2 = state.get('z3_constraints_smt2', [])
-        
-        declarations_smt2 = [f"(declare-const {var.sexpr()} (_ BitVec {var.sort().size()}))" for var in fields.values()]
-        
-        # Determine logical reachability across all structural paths
         path_reachable = False
         valid_path_conditions = None
-        
+
         if not all_path_conditions:
             print("  -> AVISO: Análise pulada. Pacote NUNCA alcançará a tabela (Sem Caminho Estrutural).")
-            output_states.append(state); continue
+            output_states.append(state)
+            continue
 
         parser_assertions = [f"(assert {s})" for s in parser_constraints_smt2]
         for p_conds in all_path_conditions:
             path_assertions = [f"(assert {cond.sexpr()})" for cond in p_conds] if p_conds else []
             full_script = "\n".join(declarations_smt2 + parser_assertions + path_assertions)
             reachability_solver = Solver()
-            try: reachability_solver.from_string(full_script)
-            except Exception as e: print(f"  -> ERRO Z3: Falha ao carregar SMT: {e}"); continue
-            
+            try:
+                reachability_solver.from_string(full_script)
+            except Exception as e:
+                print(f"  -> ERRO Z3: Falha ao carregar SMT: {e}")
+                continue
             if reachability_solver.check() == sat:
                 path_reachable = True
                 valid_path_conditions = p_conds
@@ -637,34 +692,36 @@ if __name__ == "__main__":
         print("  --- Verificando Alcançabilidade (Reachability) ---")
         if not path_reachable:
             print(f"  -> AVISO: Análise pulada. Pacote NUNCA alcançará a tabela '{table_name}'.")
-            output_states.append(state); continue
-        else: print("  -> OK: A tabela é alcançável via um caminho válido.")
-        
+            output_states.append(state)
+            continue
+        print("  -> OK: A tabela é alcançável via um caminho válido.")
+
         analysis_solver = Solver()
         chosen_path_assertions = [f"(assert {cond.sexpr()})" for cond in valid_path_conditions] if valid_path_conditions else []
         main_script = "\n".join(declarations_smt2 + parser_assertions + chosen_path_assertions)
-        try: analysis_solver.from_string(main_script)
-        except Exception as e: print(f"  -> ERRO Z3: Falha ao carregar SMT principal: {e}. Pulando."); continue
-        
+        try:
+            analysis_solver.from_string(main_script)
+        except Exception as e:
+            print(f"  -> ERRO Z3: Falha ao carregar SMT principal: {e}. Pulando.")
+            continue
+
         current_symbolic_fields = fields.copy()
         if "field_updates" in state:
-            decls = {var.sexpr(): var for key, var in fields.items()}
+            decls = {var.sexpr(): var for var in fields.values()}
             for field_str, expr_str in state["field_updates"].items():
-                parts = field_str.split('.'); field_key = tuple(parts) if len(parts)==2 else (parts[1],parts[2]) if len(parts)==3 else None
+                field_key = _state_field_key(field_str)
                 if field_key and field_key in current_symbolic_fields:
-                    try: 
+                    try:
                         target_var = fields.get(field_key)
                         if target_var is None:
                             continue
                         with suppress_c_stdout_stderr():
                             current_symbolic_fields[field_key] = parse_field_update_expr(expr_str, decls=decls, target_var=target_var)
-                    except Exception as e: print(f"Erro ao parsear SMT para {field_str}: {e}")
-        
-        target_table_def = next((t for t in ingress_pipeline.get('tables', []) if t['name'] == table_name), None)
-        if not target_table_def: print(f"Erro: Definição da tabela '{table_name}' não encontrada."); continue
+                    except Exception as e:
+                        print(f"Erro ao parsear SMT para {field_str}: {e}")
 
         final_symbolic_fields = execute_symbolic_table(target_table_def, current_symbolic_fields, runtime_entries, fsm_data)
-        
+
         print("  --- Análise de Resultados (Visão Completa) ---")
         egress_spec = final_symbolic_fields.get(('standard_metadata', 'egress_spec'))
         if egress_spec is not None:
@@ -674,16 +731,19 @@ if __name__ == "__main__":
                 analysis_solver.add(egress_spec == port_num)
                 if analysis_solver.check() == sat:
                     m = analysis_solver.model()
-                    dst_addr_field = fields.get(('ipv4', 'dstAddr')) 
+                    dst_addr_field = fields.get(('ipv4', 'dstAddr'))
                     target_ip_str = "N/A"
                     if dst_addr_field is not None:
                         dst_addr_val = m.eval(dst_addr_field, model_completion=True)
                         if dst_addr_val is not None:
-                            try: target_ip_str = int_to_ip(dst_addr_val.as_long())
-                            except: pass 
-                    
+                            try:
+                                target_ip_str = int_to_ip(dst_addr_val.as_long())
+                            except Exception:
+                                pass
+
                     target_host = ip_to_host_map.get(target_ip_str, f"IP desconhecido ({target_ip_str})")
-                    if port_num == 511: print(f"  -> Resultado: SIM, pacote para '{target_host}' é DESCARTADO (drop).")
+                    if port_num == 511:
+                        print(f"  -> Resultado: SIM, pacote para '{target_host}' é DESCARTADO (drop).")
                     else:
                         destination_info = port_to_destination_map.get(port_num, "desconhecido")
                         print(f"  -> Resultado: SIM, pacote para '{target_host}' é ENCAMINHADO para a porta {port_num} (-> {destination_info}).")
@@ -692,43 +752,344 @@ if __name__ == "__main__":
         new_constraints = list(state.get('z3_constraints_smt2', []))
         if valid_path_conditions:
             for cond in valid_path_conditions:
-                cond_smt = cond.sexpr()
-                if cond_smt not in new_constraints:
-                    new_constraints.append(cond_smt)
+                _add_unique_constraint_string(new_constraints, cond)
         if egress_spec is not None:
             if isinstance(egress_spec, z3.ExprRef):
                 drop_value = BitVecVal(511, egress_spec.size()) if isinstance(egress_spec, z3.BitVecRef) else 511
                 no_drop_constraint = (egress_spec != drop_value)
-                analysis_solver.push(); analysis_solver.add(no_drop_constraint)
+                analysis_solver.push()
+                analysis_solver.add(no_drop_constraint)
                 if analysis_solver.check() == sat:
-                    new_constraints.append(no_drop_constraint.sexpr())
-                    print("\n  --- Propagação para Próximo Estágio ---"); print("  -> Otimização: Adicionada restrição de não descarte.")
+                    _add_unique_constraint_string(new_constraints, no_drop_constraint)
+                    print("\n  --- Propagação para Próximo Estágio ---")
+                    print("  -> Otimização: Adicionada restrição de não descarte.")
                 else:
-                    print("\n  --- Propagação para Próximo Estágio ---"); print("  -> AVISO: Todos os pacotes deste estado são descartados."); continue 
+                    print("\n  --- Propagação para Próximo Estágio ---")
+                    print("  -> AVISO: Todos os pacotes deste estado são descartados.")
+                    analysis_solver.pop()
+                    continue
                 analysis_solver.pop()
             else:
                 print("\n  --- Propagação para Próximo Estágio ---")
                 print("  -> AVISO: egress_spec não é expressão Z3; otimização de não-descarte ignorada.")
-        
+
         field_updates = state.get("field_updates", {}).copy()
         for field_key, val_expr in final_symbolic_fields.items():
             original_val = current_symbolic_fields.get(field_key)
             if val_expr is not None and original_val is not None:
-                 try:
-                     final_smt = simplify(val_expr).sexpr(); original_smt = simplify(original_val).sexpr()
-                     if final_smt != original_smt: field_updates[f"{field_key[0]}.{field_key[1]}"] = final_smt
-                 except z3.Z3Exception: 
-                     if val_expr.sexpr() != original_val.sexpr(): field_updates[f"{field_key[0]}.{field_key[1]}"] = val_expr.sexpr()
-            elif val_expr is not None: field_updates[f"{field_key[0]}.{field_key[1]}"] = val_expr.sexpr()
+                try:
+                    final_smt = simplify(val_expr).sexpr()
+                    original_smt = simplify(original_val).sexpr()
+                    if final_smt != original_smt:
+                        field_updates[f"{field_key[0]}.{field_key[1]}"] = final_smt
+                except z3.Z3Exception:
+                    if val_expr.sexpr() != original_val.sexpr():
+                        field_updates[f"{field_key[0]}.{field_key[1]}"] = val_expr.sexpr()
+            elif val_expr is not None:
+                field_updates[f"{field_key[0]}.{field_key[1]}"] = val_expr.sexpr()
 
-        new_state = { 
-            "description": state.get("description", "???") + f" -> {table_name}", 
-            "z3_constraints_smt2": new_constraints, 
-            "present_headers": state.get("present_headers", []), 
-            "history": state.get("history", []) + [table_name], 
-            "field_updates": field_updates 
+        new_state = {
+            "description": state.get("description", "???") + f" -> {table_name}",
+            "z3_constraints_smt2": new_constraints,
+            "present_headers": state.get("present_headers", []),
+            "history": state.get("history", []) + [table_name],
+            "field_updates": field_updates
         }
         output_states.append(new_state)
+    return output_states
 
-    with open(output_states_file, 'w') as f: json.dump(output_states, f, indent=2)
+def _run_table_analysis_incremental(
+    *,
+    initial_states,
+    input_states_file,
+    table_name,
+    switch_id,
+    fields,
+    runtime_entries,
+    fsm_data,
+    ingress_pipeline,
+    all_path_conditions,
+    ip_to_host_map,
+    port_to_destination_map,
+):
+    print(f"--- Carregados {len(initial_states)} estados de '{input_states_file}' ---")
+    print(f"--- Executando análise modular da tabela '{table_name}' para o SWITCH '{switch_id}' (incremental) ---")
+
+    output_states = []
+    decls = {var.sexpr(): var for var in fields.values()}
+    parser_constraint_cache = {}
+    field_update_cache = {}
+
+    target_table_def = next((t for t in ingress_pipeline.get('tables', []) if t['name'] == table_name), None)
+    if not target_table_def:
+        print(f"Erro: Definição da tabela '{table_name}' não encontrada.")
+        return output_states
+
+    path_condition_exprs = [And(*p_conds) if p_conds else BoolVal(True) for p_conds in all_path_conditions]
+    if len(path_condition_exprs) > 1:
+        path_disjunction_expr = Or(*path_condition_exprs)
+    elif len(path_condition_exprs) == 1:
+        path_disjunction_expr = path_condition_exprs[0]
+    else:
+        path_disjunction_expr = None
+
+    for i, state in enumerate(initial_states):
+        print("\n" + "="*50)
+        print(f"Analisando para o Estado de Entrada #{i} ({state.get('description', 'Sem desc')})")
+
+        parser_constraints_smt2 = state.get('z3_constraints_smt2', [])
+
+        if not all_path_conditions:
+            print("  -> AVISO: Análise pulada. Pacote NUNCA alcançará a tabela (Sem Caminho Estrutural).")
+            output_states.append(state)
+            continue
+
+        try:
+            parser_constraints = _parse_state_constraints(parser_constraints_smt2, decls, parser_constraint_cache)
+        except Exception as e:
+            print(f"  -> ERRO Z3: Falha ao parsear constraints SMT do estado: {e}")
+            output_states.append(state)
+            continue
+
+        reachability_solver = Solver()
+        if parser_constraints:
+            reachability_solver.add(*parser_constraints)
+        if path_disjunction_expr is not None:
+            reachability_solver.add(path_disjunction_expr)
+
+        print("  --- Verificando Alcançabilidade (Reachability) ---")
+        if reachability_solver.check() != sat:
+            print(f"  -> AVISO: Análise pulada. Pacote NUNCA alcançará a tabela '{table_name}'.")
+            output_states.append(state)
+            continue
+
+        valid_path_conditions = _pick_path_from_model(reachability_solver.model(), all_path_conditions)
+        if valid_path_conditions is None:
+            valid_path_conditions = []
+        print("  -> OK: A tabela é alcançável via um caminho válido.")
+
+        analysis_solver = Solver()
+        if parser_constraints:
+            analysis_solver.add(*parser_constraints)
+        if valid_path_conditions:
+            analysis_solver.add(*valid_path_conditions)
+
+        current_symbolic_fields = _load_state_symbolic_fields(state, fields, decls, field_update_cache)
+        final_symbolic_fields = execute_symbolic_table(target_table_def, current_symbolic_fields, runtime_entries, fsm_data)
+
+        print("  --- Análise de Resultados (Visão Completa) ---")
+        egress_spec = final_symbolic_fields.get(('standard_metadata', 'egress_spec'))
+        if egress_spec is not None:
+            possible_ports = set(p for p in port_to_destination_map.keys()) | {511}
+            for port_num in sorted(list(possible_ports)):
+                analysis_solver.push()
+                analysis_solver.add(egress_spec == port_num)
+                if analysis_solver.check() == sat:
+                    m = analysis_solver.model()
+                    dst_addr_field = fields.get(('ipv4', 'dstAddr'))
+                    target_ip_str = "N/A"
+                    if dst_addr_field is not None:
+                        dst_addr_val = m.eval(dst_addr_field, model_completion=True)
+                        if dst_addr_val is not None:
+                            try:
+                                target_ip_str = int_to_ip(dst_addr_val.as_long())
+                            except Exception:
+                                pass
+
+                    target_host = ip_to_host_map.get(target_ip_str, f"IP desconhecido ({target_ip_str})")
+                    if port_num == 511:
+                        print(f"  -> Resultado: SIM, pacote para '{target_host}' é DESCARTADO (drop).")
+                    else:
+                        destination_info = port_to_destination_map.get(port_num, "desconhecido")
+                        print(f"  -> Resultado: SIM, pacote para '{target_host}' é ENCAMINHADO para a porta {port_num} (-> {destination_info}).")
+                analysis_solver.pop()
+
+        new_constraints = list(state.get('z3_constraints_smt2', []))
+        if valid_path_conditions:
+            for cond in valid_path_conditions:
+                _add_unique_constraint_string(new_constraints, cond)
+        if egress_spec is not None:
+            if isinstance(egress_spec, z3.ExprRef):
+                drop_value = BitVecVal(511, egress_spec.size()) if isinstance(egress_spec, z3.BitVecRef) else 511
+                no_drop_constraint = (egress_spec != drop_value)
+                analysis_solver.push()
+                analysis_solver.add(no_drop_constraint)
+                if analysis_solver.check() == sat:
+                    _add_unique_constraint_string(new_constraints, no_drop_constraint)
+                    print("\n  --- Propagação para Próximo Estágio ---")
+                    print("  -> Otimização: Adicionada restrição de não descarte.")
+                else:
+                    print("\n  --- Propagação para Próximo Estágio ---")
+                    print("  -> AVISO: Todos os pacotes deste estado são descartados.")
+                    analysis_solver.pop()
+                    continue
+                analysis_solver.pop()
+            else:
+                print("\n  --- Propagação para Próximo Estágio ---")
+                print("  -> AVISO: egress_spec não é expressão Z3; otimização de não-descarte ignorada.")
+
+        field_updates = state.get("field_updates", {}).copy()
+        for field_key, val_expr in final_symbolic_fields.items():
+            original_val = current_symbolic_fields.get(field_key)
+            if val_expr is not None and original_val is not None:
+                try:
+                    final_smt = simplify(val_expr).sexpr()
+                    original_smt = simplify(original_val).sexpr()
+                    if final_smt != original_smt:
+                        field_updates[f"{field_key[0]}.{field_key[1]}"] = final_smt
+                except z3.Z3Exception:
+                    if val_expr.sexpr() != original_val.sexpr():
+                        field_updates[f"{field_key[0]}.{field_key[1]}"] = val_expr.sexpr()
+            elif val_expr is not None:
+                field_updates[f"{field_key[0]}.{field_key[1]}"] = val_expr.sexpr()
+
+        new_state = {
+            "description": state.get("description", "???") + f" -> {table_name}",
+            "z3_constraints_smt2": new_constraints,
+            "present_headers": state.get("present_headers", []),
+            "history": state.get("history", []) + [table_name],
+            "field_updates": field_updates
+        }
+        output_states.append(new_state)
+    return output_states
+
+# --- Ponto de Entrada Principal ---
+if __name__ == "__main__":
+    if len(sys.argv) != 8:
+        print("Uso: python3 run_table.py <fsm.json> <topology.json> <runtime_config.json> <estados_entrada.json> <switch_id> <nome_da_tabela> <estados_saida.json>")
+        exit(1)
+
+    fsm_file = sys.argv[1]
+    topology_file = sys.argv[2]
+    config_file = sys.argv[3]
+    input_states_file = sys.argv[4]
+    switch_id = sys.argv[5]
+    table_name = sys.argv[6]
+    output_states_file = sys.argv[7]
+
+    solver_mode = _normalize_solver_mode(os.getenv("P4SYMTEST_SOLVER_MODE", "incremental"))
+    validate_equivalence = _env_flag("P4SYMTEST_SOLVER_VALIDATE", default=False)
+    validate_fail_on_mismatch = _env_flag("P4SYMTEST_SOLVER_VALIDATE_FAIL_ON_MISMATCH", default=False)
+    fallback_to_legacy = _env_flag("P4SYMTEST_SOLVER_FALLBACK_LEGACY", default=True)
+    fallback_on_mismatch = _env_flag("P4SYMTEST_SOLVER_FALLBACK_ON_MISMATCH", default=True)
+
+    print(f"[solver] mode={solver_mode} validate={int(validate_equivalence)} fallback_legacy={int(fallback_to_legacy)}")
+
+    fsm_data = load_json(fsm_file)
+    topology_data = load_json(topology_file)
+    runtime_entries_all = load_json(config_file)
+    initial_states = load_json(input_states_file)
+    runtime_entries = runtime_entries_all.get(switch_id, {})
+
+    fields = {}
+    header_types = {ht['name']: ht for ht in fsm_data.get('header_types', [])}
+    for h in fsm_data.get('headers', []):
+        ht_name = h.get('header_type')
+        h_name = h.get('name')
+        if not h_name:
+            continue
+        if ht_name and ht_name in header_types:
+            for f_info in header_types[ht_name].get('fields', []):
+                if len(f_info) >= 2:
+                    f_name, f_width = f_info[0], f_info[1]
+                    if isinstance(f_name, str) and isinstance(f_width, int) and f_width > 0:
+                        fields[(h_name, f_name)] = BitVec(f"{h_name}.{f_name}", f_width)
+        if h_name != 'scalars':
+            fields[(h_name, '$valid$')] = BitVec(f"{h_name}.$valid$", 1)
+
+    ip_to_host_map = {h_info['ip']: h_id for h_id, h_info in topology_data.get('hosts', {}).items()}
+    port_to_destination_map = {}
+    current_switch_info = topology_data.get('switches', {}).get(switch_id, {})
+    for h_id, h_info in topology_data.get('hosts', {}).items():
+        if h_info.get('conectado_a', '').startswith(switch_id):
+            port_name = h_info['conectado_a']
+            port_num = current_switch_info.get('portas', {}).get(port_name)
+            if port_num:
+                port_to_destination_map[port_num] = f"host {h_id} (direta)"
+    for link in topology_data.get('links', []):
+        if link.get('from', '').startswith(switch_id):
+            port_name = link['from']
+            dest_switch = link.get('to', 'N/A').split('-')[0]
+            port_num = current_switch_info.get('portas', {}).get(port_name)
+            if port_num:
+                port_to_destination_map[port_num] = f"switch {dest_switch}"
+        elif link.get('to', '').startswith(switch_id):
+            port_name = link['to']
+            dest_switch = link.get('from', 'N/A').split('-')[0]
+            port_num = current_switch_info.get('portas', {}).get(port_name)
+            if port_num:
+                port_to_destination_map[port_num] = f"switch {dest_switch}"
+
+    ingress_pipeline = next((p for p in fsm_data.get('pipelines', []) if p.get('name') == 'ingress'), None)
+    if not ingress_pipeline:
+        print("Erro: Pipeline 'ingress' não encontrado.")
+        exit(1)
+
+    print(f"Calculando caminho do pipeline até a tabela '{table_name}'...")
+    _path_cache.clear()
+    all_path_conditions = find_paths_to_table(ingress_pipeline, ingress_pipeline.get('init_table'), table_name, set(), fields)
+    if not all_path_conditions:
+        print(f"AVISO: A tabela '{table_name}' parece ser estruturalmente inalcançável.")
+
+    common_kwargs = dict(
+        initial_states=initial_states,
+        input_states_file=input_states_file,
+        table_name=table_name,
+        switch_id=switch_id,
+        fields=fields,
+        runtime_entries=runtime_entries,
+        fsm_data=fsm_data,
+        ingress_pipeline=ingress_pipeline,
+        all_path_conditions=all_path_conditions,
+        ip_to_host_map=ip_to_host_map,
+        port_to_destination_map=port_to_destination_map,
+    )
+
+    output_states = None
+    incremental_states = None
+    legacy_states = None
+
+    if solver_mode == "legacy":
+        legacy_states = _run_table_analysis_legacy(**common_kwargs)
+        output_states = legacy_states
+        if validate_equivalence:
+            incremental_states = _run_table_analysis_incremental(**common_kwargs)
+            eq, message = _compare_state_outputs(legacy_states, incremental_states)
+            print(f"[solver][validate] {message}")
+            if not eq and validate_fail_on_mismatch:
+                with open(output_states_file, 'w') as f:
+                    json.dump(output_states, f, indent=2)
+                exit(2)
+    else:
+        incremental_error = None
+        try:
+            incremental_states = _run_table_analysis_incremental(**common_kwargs)
+            output_states = incremental_states
+        except Exception as e:
+            incremental_error = e
+            print(f"[solver] incremental falhou: {e}")
+
+        if incremental_error is not None and fallback_to_legacy:
+            print("[solver] fallback para modo legacy.")
+            legacy_states = _run_table_analysis_legacy(**common_kwargs)
+            output_states = legacy_states
+        elif incremental_error is not None:
+            raise incremental_error
+
+        if validate_equivalence and incremental_states is not None:
+            legacy_states = _run_table_analysis_legacy(**common_kwargs)
+            eq, message = _compare_state_outputs(incremental_states, legacy_states)
+            print(f"[solver][validate] {message}")
+            if not eq and fallback_on_mismatch:
+                print("[solver][validate] divergência detectada, escrevendo saída legacy por segurança.")
+                output_states = legacy_states
+            if not eq and validate_fail_on_mismatch:
+                with open(output_states_file, 'w') as f:
+                    json.dump(output_states, f, indent=2)
+                exit(2)
+
+    if output_states is None:
+        output_states = []
+    with open(output_states_file, 'w') as f:
+        json.dump(output_states, f, indent=2)
     print(f"\nAnálise concluída. {len(output_states)} estados salvos em '{output_states_file}'.")
