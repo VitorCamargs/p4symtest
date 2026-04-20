@@ -115,13 +115,14 @@ def run_command_with_heartbeat(
     heartbeat_label: str | None = None,
     heartbeat_interval_s: int = 20,
     env: Dict[str, str] | None = None,
+    discard_stdout: bool = True,
 ) -> Tuple[bool, float, str]:
     start = time.time()
     try:
         proc = subprocess.Popen(
             list(cmd),
             cwd=str(cwd) if cwd else None,
-            stdout=subprocess.PIPE,
+            stdout=subprocess.DEVNULL if discard_stdout else subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
             encoding="utf-8",
