@@ -15,6 +15,7 @@ import os
 import subprocess
 import sys
 import time
+import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Sequence, Tuple
@@ -317,9 +318,11 @@ class BenchmarkMenuRunner:
         if str(BENCH_EXHAUSTIVE_DIR) not in sys.path:
             sys.path.append(str(BENCH_EXHAUSTIVE_DIR))
         try:
-            from table_execution_cache import TableExecutionCache
+            from table_execution_cache import TableExecutionCache, optimize_table_input
 
             self._table_execution_cache_cls = TableExecutionCache
+            if self._optimize_table_input is None:
+                self._optimize_table_input = optimize_table_input
             return True
         except Exception:
             return False
@@ -500,8 +503,9 @@ class BenchmarkMenuRunner:
                 states_only, table_name, table_def, fsm_data, cache
             )
 
-            temp_input = input_states.parent / f".temp_{table_name}_{input_states.name}"
-            temp_output = output_file.parent / f".temp_{table_name}_{output_file.name}"
+            tmp_tag = uuid.uuid4().hex
+            temp_input = input_states.parent / f".temp_{table_name}_{tmp_tag}_{input_states.name}"
+            temp_output = output_file.parent / f".temp_{table_name}_{tmp_tag}_{output_file.name}"
             with temp_input.open("w", encoding="utf-8") as f:
                 json.dump(unique_states, f)
 
@@ -653,8 +657,9 @@ class BenchmarkMenuRunner:
                 states_only, table_name, table_def, fsm_data, cache
             )
 
-            temp_input = input_states.parent / f".temp_{table_name}_{input_states.name}"
-            temp_output = output_file.parent / f".temp_{table_name}_{output_file.name}"
+            tmp_tag = uuid.uuid4().hex
+            temp_input = input_states.parent / f".temp_{table_name}_{tmp_tag}_{input_states.name}"
+            temp_output = output_file.parent / f".temp_{table_name}_{tmp_tag}_{output_file.name}"
             with temp_input.open("w", encoding="utf-8") as f:
                 json.dump(unique_states, f)
 
@@ -715,6 +720,127 @@ class BenchmarkMenuRunner:
         except Exception as exc:
             return False, time.time() - start, str(exc)
 
+    def _run_ingress_table_reduced_nonoptimized(
+        self,
+        *,
+        fsm_file: Path,
+        topology_file: Path,
+        runtime_file: Path,
+        input_states: Path,
+        table_name: str,
+        output_file: Path,
+        fsm_data: Dict[str, Any] | None = None,
+        heartbeat_label: str | None = None,
+    ) -> Tuple[bool, float, str]:
+        start = time.time()
+
+        if not self._ensure_table_cache_class() or self._optimize_table_input is None:
+            return self._run_ingress_table(
+                fsm_file=fsm_file,
+                topology_file=topology_file,
+                runtime_file=runtime_file,
+                input_states=input_states,
+                table_name=table_name,
+                output_file=output_file,
+                heartbeat_label=heartbeat_label,
+            )
+
+        try:
+            if fsm_data is None:
+                with fsm_file.open("r", encoding="utf-8") as f:
+                    fsm_data = json.load(f)
+
+            with input_states.open("r", encoding="utf-8") as f:
+                original_states = json.load(f)
+            if not isinstance(original_states, list):
+                original_states = []
+
+            if not original_states:
+                output_file.parent.mkdir(parents=True, exist_ok=True)
+                with output_file.open("w", encoding="utf-8") as f:
+                    json.dump([], f)
+                return True, time.time() - start, ""
+
+            pipeline = next((p for p in fsm_data.get("pipelines", []) if p.get("name") == "ingress"), None)
+            if pipeline is None:
+                return self._run_ingress_table(
+                    fsm_file=fsm_file,
+                    topology_file=topology_file,
+                    runtime_file=runtime_file,
+                    input_states=input_states,
+                    table_name=table_name,
+                    output_file=output_file,
+                    heartbeat_label=heartbeat_label,
+                )
+
+            table_def = next((t for t in pipeline.get("tables", []) if t.get("name") == table_name), None)
+            if table_def is None:
+                return self._run_ingress_table(
+                    fsm_file=fsm_file,
+                    topology_file=topology_file,
+                    runtime_file=runtime_file,
+                    input_states=input_states,
+                    table_name=table_name,
+                    output_file=output_file,
+                    heartbeat_label=heartbeat_label,
+                )
+
+            hash_helper = self._table_execution_cache_cls(None)
+            unique_states, index_mapping = self._optimize_table_input(
+                original_states, table_name, table_def, fsm_data, hash_helper
+            )
+
+            tmp_tag = uuid.uuid4().hex
+            temp_input = input_states.parent / f".temp_nonopt_{table_name}_{tmp_tag}_{input_states.name}"
+            temp_output = output_file.parent / f".temp_nonopt_{table_name}_{tmp_tag}_{output_file.name}"
+            with temp_input.open("w", encoding="utf-8") as f:
+                json.dump(unique_states, f)
+
+            ok, _, err = self._run_ingress_table(
+                fsm_file=fsm_file,
+                topology_file=topology_file,
+                runtime_file=runtime_file,
+                input_states=temp_input,
+                table_name=table_name,
+                output_file=temp_output,
+                heartbeat_label=None,
+            )
+            if not ok:
+                temp_input.unlink(missing_ok=True)
+                temp_output.unlink(missing_ok=True)
+                return False, time.time() - start, err
+
+            with temp_output.open("r", encoding="utf-8") as f:
+                processed_results = json.load(f)
+
+            relevant_fields = hash_helper.table_relevant_fields.get(table_name, set())
+            hash_to_result: Dict[str, Dict[str, Any]] = {}
+            for idx, state in enumerate(unique_states):
+                if idx < len(processed_results):
+                    state_hash = hash_helper._compute_table_state_hash(state, table_name, relevant_fields)
+                    hash_to_result[state_hash] = processed_results[idx]
+
+            expanded_results: List[Dict[str, Any]] = []
+            for orig_idx, orig_state in enumerate(original_states):
+                state_hash = index_mapping.get(orig_idx)
+                result = hash_to_result.get(state_hash, orig_state)
+                if isinstance(result, dict):
+                    expanded = result.copy()
+                    expanded["description"] = orig_state.get("description", expanded.get("description", "Unknown"))
+                else:
+                    expanded = orig_state
+                expanded_results.append(expanded)
+
+            output_file.parent.mkdir(parents=True, exist_ok=True)
+            with output_file.open("w", encoding="utf-8") as f:
+                json.dump(expanded_results, f, indent=2)
+
+            temp_input.unlink(missing_ok=True)
+            temp_output.unlink(missing_ok=True)
+            return True, time.time() - start, ""
+        except Exception as exc:
+            return False, time.time() - start, str(exc)
+
     def _run_egress_table_reduced_nonoptimized(
         self,
         *,
@@ -728,7 +854,7 @@ class BenchmarkMenuRunner:
     ) -> Tuple[bool, float, str]:
         start = time.time()
 
-        if not self._ensure_table_cache_class():
+        if not self._ensure_table_cache_class() or self._optimize_table_input is None:
             return self._run_egress_table(
                 fsm_file=fsm_file,
                 runtime_file=runtime_file,
@@ -777,24 +903,13 @@ class BenchmarkMenuRunner:
                 )
 
             hash_helper = self._table_execution_cache_cls(None)
-            relevant_fields = hash_helper._extract_relevant_fields(table_def, fsm_data)
+            unique_states, index_mapping = self._optimize_table_input(
+                original_states, table_name, table_def, fsm_data, hash_helper
+            )
 
-            unique_states: List[Dict[str, Any]] = []
-            unique_hashes: List[str] = []
-            state_hashes: List[str] = []
-            seen_hashes: set[str] = set()
-
-            for state in original_states:
-                state_hash = hash_helper._compute_table_state_hash(state, table_name, relevant_fields)
-                state_hashes.append(state_hash)
-                if state_hash in seen_hashes:
-                    continue
-                seen_hashes.add(state_hash)
-                unique_hashes.append(state_hash)
-                unique_states.append(state)
-
-            temp_input = input_states.parent / f".temp_nonopt_{table_name}_{input_states.name}"
-            temp_output = output_file.parent / f".temp_nonopt_{table_name}_{output_file.name}"
+            tmp_tag = uuid.uuid4().hex
+            temp_input = input_states.parent / f".temp_nonopt_{table_name}_{tmp_tag}_{input_states.name}"
+            temp_output = output_file.parent / f".temp_nonopt_{table_name}_{tmp_tag}_{output_file.name}"
             with temp_input.open("w", encoding="utf-8") as f:
                 json.dump(unique_states, f)
 
@@ -814,14 +929,17 @@ class BenchmarkMenuRunner:
             with temp_output.open("r", encoding="utf-8") as f:
                 processed_results = json.load(f)
 
+            relevant_fields = hash_helper.table_relevant_fields.get(table_name, set())
             hash_to_result: Dict[str, Dict[str, Any]] = {}
-            for idx, h in enumerate(unique_hashes):
+            for idx, state in enumerate(unique_states):
                 if idx < len(processed_results):
-                    hash_to_result[h] = processed_results[idx]
+                    state_hash = hash_helper._compute_table_state_hash(state, table_name, relevant_fields)
+                    hash_to_result[state_hash] = processed_results[idx]
 
             expanded_results: List[Dict[str, Any]] = []
-            for orig_state, h in zip(original_states, state_hashes):
-                result = hash_to_result.get(h, orig_state)
+            for orig_idx, orig_state in enumerate(original_states):
+                state_hash = index_mapping.get(orig_idx)
+                result = hash_to_result.get(state_hash, orig_state)
                 if isinstance(result, dict):
                     expanded = result.copy()
                     expanded["description"] = orig_state.get("description", expanded.get("description", "Unknown"))
@@ -926,6 +1044,7 @@ class BenchmarkMenuRunner:
         build_dir: Path,
         run_number: int,
         path_idx: int,
+        fsm_data: Dict[str, Any] | None = None,
     ) -> Tuple[bool, float, Path | None, str]:
         current_snapshot = parser_output
         total_time = 0.0
@@ -935,13 +1054,14 @@ class BenchmarkMenuRunner:
 
         for table_idx, table_name in enumerate(table_path):
             table_out = build_dir / f"full_run{run_number}_path{path_idx}_ingress_{table_idx}.json"
-            ok, duration, err = self._run_ingress_table(
+            ok, duration, err = self._run_ingress_table_reduced_nonoptimized(
                 fsm_file=fsm_file,
                 topology_file=topology_file,
                 runtime_file=runtime_file,
                 input_states=current_snapshot,
                 table_name=table_name,
                 output_file=table_out,
+                fsm_data=fsm_data,
                 heartbeat_label=None,
             )
             total_time += duration
@@ -1004,6 +1124,13 @@ class BenchmarkMenuRunner:
         if total_paths == 0:
             return False, 0.0, None, "No ingress paths found in FSM.", 0, 0
 
+        fsm_data_for_nonopt_dedup: Dict[str, Any] | None = None
+        try:
+            with fsm_file.open("r", encoding="utf-8") as f:
+                fsm_data_for_nonopt_dedup = json.load(f)
+        except Exception:
+            fsm_data_for_nonopt_dedup = None
+
         max_workers = os.cpu_count() or 4
         ingress_total = 0.0
         explored = 0
@@ -1022,6 +1149,7 @@ class BenchmarkMenuRunner:
                     build_dir=build_dir,
                     run_number=run_number,
                     path_idx=path_idx,
+                    fsm_data=fsm_data_for_nonopt_dedup,
                 )
                 for path_idx, table_path in enumerate(paths)
             ]
