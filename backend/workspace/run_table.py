@@ -337,6 +337,19 @@ def build_z3_expression_for_conditional(expr_node, fields):
     return _to_boolref(_build_conditional_term(expr_node, fields))
 
 _path_cache = {}
+
+def _dedupe_preserve_order(items):
+    seen = set()
+    out = []
+    for item in items:
+        if item is None:
+            continue
+        if item in seen:
+            continue
+        seen.add(item)
+        out.append(item)
+    return out
+
 def find_paths_to_table(pipeline_data, start_node_name, target_table_name, visited_nodes, fields):
     path_key = (start_node_name, target_table_name)
     if path_key in _path_cache: return _path_cache[path_key]
@@ -348,14 +361,13 @@ def find_paths_to_table(pipeline_data, start_node_name, target_table_name, visit
     
     table_node = next((t for t in pipeline_data.get('tables', []) if t['name'] == start_node_name), None)
     if table_node:
-        next_node = table_node.get('base_default_next')
-        if next_node:
+        # Avoid combinatorial duplication when many actions point to the same next node.
+        # For structural reachability, each unique successor needs to be explored only once.
+        raw_next_nodes = [table_node.get('base_default_next')]
+        raw_next_nodes.extend(table_node.get('next_tables', {}).values())
+        unique_next_nodes = _dedupe_preserve_order(raw_next_nodes)
+        for next_node in unique_next_nodes:
             paths = find_paths_to_table(pipeline_data, next_node, target_table_name, visited_nodes.copy(), fields)
-            all_paths.extend(paths)
-            
-        next_tables = table_node.get('next_tables', {})
-        for act_name, next_node_act in next_tables.items():
-            paths = find_paths_to_table(pipeline_data, next_node_act, target_table_name, visited_nodes.copy(), fields)
             all_paths.extend(paths)
             
     cond_node = next((c for c in pipeline_data.get('conditionals', []) if c['name'] == start_node_name), None)
@@ -369,7 +381,19 @@ def find_paths_to_table(pipeline_data, start_node_name, target_table_name, visit
         paths_from_true = find_paths_to_table(pipeline_data, cond_node.get('true_next'), target_table_name, visited_nodes.copy(), fields)
         for p in paths_from_true:
             all_paths.append([condition_expr] + p)
-            
+
+    # Deduplicate syntactically equivalent condition lists to keep path counts bounded.
+    if all_paths:
+        deduped_paths = []
+        seen_signatures = set()
+        for path_conds in all_paths:
+            signature = tuple(cond.sexpr() for cond in path_conds)
+            if signature in seen_signatures:
+                continue
+            seen_signatures.add(signature)
+            deduped_paths.append(path_conds)
+        all_paths = deduped_paths
+
     _path_cache[path_key] = all_paths
     return all_paths
 

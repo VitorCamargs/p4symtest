@@ -44,6 +44,31 @@ PLOT_TABLES = CLI_DIR / "plot_tables_graph.py"
 PLOT_DEPARSER = CLI_DIR / "plot_deparser_graph.py"
 PLOT_FULL = CLI_DIR / "plot_full_graph.py"
 
+STAGE_TIMEOUT_S = 300
+
+
+def _env_flag(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _env_int(name: str, default: int, minimum: int = 1) -> int:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        value = int(raw)
+        return value if value >= minimum else default
+    except ValueError:
+        return default
+
+
+COMPACT_LOGS = _env_flag("P4SYMTEST_BENCH_COMPACT_LOGS", True)
+HEARTBEAT_ENABLED = _env_flag("P4SYMTEST_BENCH_HEARTBEAT", True)
+HEARTBEAT_INTERVAL_S = _env_int("P4SYMTEST_BENCH_HEARTBEAT_INTERVAL_S", 60, minimum=5)
+
 
 def now_tag() -> str:
     return datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -140,7 +165,8 @@ def run_command_with_heartbeat(
                 proc.communicate()
                 return False, time.time() - start, f"Timeout after {timeout}s"
 
-            wait_timeout = min(max(1, heartbeat_interval_s), remaining) if heartbeat_label else remaining
+            heartbeat_active = HEARTBEAT_ENABLED and bool(heartbeat_label)
+            wait_timeout = min(max(1, heartbeat_interval_s), remaining) if heartbeat_active else remaining
 
             try:
                 out, err = proc.communicate(timeout=wait_timeout)
@@ -152,7 +178,7 @@ def run_command_with_heartbeat(
                     return True, duration, ""
                 return False, duration, (err_text if err_text else out_text)[:1200]
             except subprocess.TimeoutExpired:
-                if heartbeat_label:
+                if heartbeat_active:
                     print(f"      ... {heartbeat_label} still running ({time.time() - start:.1f}s)")
                 continue
     except Exception as exc:  # pragma: no cover
@@ -217,6 +243,7 @@ class BenchmarkMenuRunner:
     def __init__(self) -> None:
         ensure_required_paths()
         OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
+        self.compact_logs = COMPACT_LOGS
         self.generator = SyntheticP4Generator(seed=42)
         self._optimized_helpers_checked = False
         self._optimized_helpers_available = False
@@ -227,6 +254,10 @@ class BenchmarkMenuRunner:
         self._optimized_table_caches: Dict[str, Any] = {}
         self._table_cache_dir = WORKSPACE_DIR / ".table_cache"
         self._table_cache_dir.mkdir(parents=True, exist_ok=True)
+
+    def _vprint(self, msg: str) -> None:
+        if not self.compact_logs:
+            print(msg)
 
     def _load_optimized_helpers(self) -> bool:
         if self._optimized_helpers_checked:
@@ -280,10 +311,23 @@ class BenchmarkMenuRunner:
             env["PYTHONPATH"] = extra
         return env
 
+    def _ensure_table_cache_class(self) -> bool:
+        if self._table_execution_cache_cls is not None:
+            return True
+        if str(BENCH_EXHAUSTIVE_DIR) not in sys.path:
+            sys.path.append(str(BENCH_EXHAUSTIVE_DIR))
+        try:
+            from table_execution_cache import TableExecutionCache
+
+            self._table_execution_cache_cls = TableExecutionCache
+            return True
+        except Exception:
+            return False
+
     def _compile(self, p4_file: Path, build_dir: Path) -> Tuple[bool, float, str, Path]:
         build_dir.mkdir(parents=True, exist_ok=True)
         cmd = [str(P4C_BIN), "--target", "bmv2", "--arch", "v1model", "-o", str(build_dir), str(p4_file)]
-        ok, duration, err = run_command(cmd, cwd=p4_file.parent, timeout=1800)
+        ok, duration, err = run_command(cmd, cwd=p4_file.parent, timeout=STAGE_TIMEOUT_S)
         fsm_file = build_dir / f"{p4_file.stem}.json"
         if ok and not fsm_file.exists():
             return False, duration, f"FSM output not found: {fsm_file}", fsm_file
@@ -293,7 +337,13 @@ class BenchmarkMenuRunner:
         self, fsm_file: Path, output_file: Path, heartbeat_label: str | None = None
     ) -> Tuple[bool, float, str]:
         cmd = ["python3", str(RUN_PARSER), str(fsm_file), str(output_file)]
-        return run_command_with_heartbeat(cmd, cwd=RUN_SCRIPTS_DIR, timeout=1800, heartbeat_label=heartbeat_label)
+        return run_command_with_heartbeat(
+            cmd,
+            cwd=RUN_SCRIPTS_DIR,
+            timeout=STAGE_TIMEOUT_S,
+            heartbeat_label=heartbeat_label,
+            heartbeat_interval_s=HEARTBEAT_INTERVAL_S,
+        )
 
     def _run_ingress_table(
         self,
@@ -316,7 +366,13 @@ class BenchmarkMenuRunner:
             table_name,
             str(output_file),
         ]
-        return run_command_with_heartbeat(cmd, cwd=RUN_SCRIPTS_DIR, timeout=1800, heartbeat_label=heartbeat_label)
+        return run_command_with_heartbeat(
+            cmd,
+            cwd=RUN_SCRIPTS_DIR,
+            timeout=STAGE_TIMEOUT_S,
+            heartbeat_label=heartbeat_label,
+            heartbeat_interval_s=HEARTBEAT_INTERVAL_S,
+        )
 
     def _run_ingress_table_cached(
         self,
@@ -344,8 +400,9 @@ class BenchmarkMenuRunner:
         return run_command_with_heartbeat(
             cmd,
             cwd=RUN_SCRIPTS_DIR,
-            timeout=1800,
+            timeout=STAGE_TIMEOUT_S,
             heartbeat_label=heartbeat_label,
+            heartbeat_interval_s=HEARTBEAT_INTERVAL_S,
             env=self._optimized_env(),
         )
 
@@ -506,6 +563,282 @@ class BenchmarkMenuRunner:
         except Exception as exc:
             return False, time.time() - start, str(exc)
 
+    def _run_egress_table_cached_legacy(
+        self,
+        *,
+        fsm_file: Path,
+        runtime_file: Path,
+        input_states: Path,
+        table_name: str,
+        output_file: Path,
+        run_number: int,
+        fsm_data: Dict[str, Any] | None = None,
+    ) -> Tuple[bool, float, str]:
+        start = time.time()
+        if self._optimize_table_input is None:
+            return False, 0.0, "optimized cache helpers are unavailable"
+
+        try:
+            if fsm_data is None:
+                with fsm_file.open("r", encoding="utf-8") as f:
+                    fsm_data = json.load(f)
+
+            with input_states.open("r", encoding="utf-8") as f:
+                original_states = json.load(f)
+            if not isinstance(original_states, list):
+                original_states = []
+
+            if not original_states:
+                output_file.parent.mkdir(parents=True, exist_ok=True)
+                with output_file.open("w", encoding="utf-8") as f:
+                    json.dump([], f)
+                return True, time.time() - start, ""
+
+            cache = self._get_table_cache(table_name, run_number)
+
+            pipeline = next((p for p in fsm_data.get("pipelines", []) if p.get("name") == "egress"), None)
+            if pipeline is None:
+                return self._run_egress_table(
+                    fsm_file=fsm_file,
+                    runtime_file=runtime_file,
+                    input_states=input_states,
+                    table_name=table_name,
+                    output_file=output_file,
+                    heartbeat_label=None,
+                )
+
+            table_def = next((t for t in pipeline.get("tables", []) if t.get("name") == table_name), None)
+            if table_def is None:
+                return self._run_egress_table(
+                    fsm_file=fsm_file,
+                    runtime_file=runtime_file,
+                    input_states=input_states,
+                    table_name=table_name,
+                    output_file=output_file,
+                    heartbeat_label=None,
+                )
+
+            cached_results: List[Tuple[int, Dict[str, Any]]] = []
+            states_to_process: List[Tuple[int, Dict[str, Any]]] = []
+            for idx, state in enumerate(original_states):
+                hit, cached_result = cache.lookup(state, table_name, table_def, fsm_data)
+                if hit:
+                    cached_results.append((idx, cached_result))
+                else:
+                    states_to_process.append((idx, state))
+
+            if not states_to_process:
+                final_results: List[Dict[str, Any]] = []
+                cache_map = {idx: res for idx, res in cached_results}
+                for idx, state in enumerate(original_states):
+                    cached = cache_map.get(idx)
+                    if cached:
+                        result = state.copy()
+                        result["field_updates"] = cached.get("field_updates", result.get("field_updates", {}))
+                        result["z3_constraints_smt2"] = cached.get(
+                            "new_constraints",
+                            result.get("z3_constraints_smt2", []),
+                        )
+                        result["was_cached"] = True
+                        final_results.append(result)
+                    else:
+                        final_results.append(state)
+                output_file.parent.mkdir(parents=True, exist_ok=True)
+                with output_file.open("w", encoding="utf-8") as f:
+                    json.dump(final_results, f, indent=2)
+                return True, time.time() - start, ""
+
+            states_only = [s for _, s in states_to_process]
+            unique_states, index_mapping = self._optimize_table_input(
+                states_only, table_name, table_def, fsm_data, cache
+            )
+
+            temp_input = input_states.parent / f".temp_{table_name}_{input_states.name}"
+            temp_output = output_file.parent / f".temp_{table_name}_{output_file.name}"
+            with temp_input.open("w", encoding="utf-8") as f:
+                json.dump(unique_states, f)
+
+            ok, _, err = self._run_egress_table(
+                fsm_file=fsm_file,
+                runtime_file=runtime_file,
+                input_states=temp_input,
+                table_name=table_name,
+                output_file=temp_output,
+                heartbeat_label=None,
+            )
+            if not ok:
+                temp_input.unlink(missing_ok=True)
+                temp_output.unlink(missing_ok=True)
+                return False, time.time() - start, err
+
+            with temp_output.open("r", encoding="utf-8") as f:
+                processed_results = json.load(f)
+
+            hash_to_result: Dict[str, Dict[str, Any]] = {}
+            for idx, state in enumerate(unique_states):
+                if idx < len(processed_results):
+                    result = processed_results[idx]
+                    state_hash = cache._compute_table_state_hash(
+                        state, table_name, cache.table_relevant_fields[table_name]
+                    )
+                    hash_to_result[state_hash] = result
+                    cache.store(state, result, table_name, table_def, fsm_data)
+
+            full_results: List[Dict[str, Any]] = []
+            processed_idx_map = {states_to_process[i][0]: i for i in range(len(states_to_process))}
+            for orig_idx, state in enumerate(original_states):
+                cached = next((r for i, r in cached_results if i == orig_idx), None)
+                if cached:
+                    result = state.copy()
+                    result["field_updates"] = cached.get("field_updates", result.get("field_updates", {}))
+                    result["z3_constraints_smt2"] = cached.get("new_constraints", result.get("z3_constraints_smt2", []))
+                    result["was_cached"] = True
+                else:
+                    proc_idx = processed_idx_map.get(orig_idx)
+                    if proc_idx is not None:
+                        state_hash = index_mapping.get(proc_idx)
+                        result = hash_to_result.get(state_hash, state).copy()
+                        result["description"] = state.get("description", "Unknown")
+                        result["was_cached"] = False
+                    else:
+                        result = state
+                full_results.append(result)
+
+            output_file.parent.mkdir(parents=True, exist_ok=True)
+            with output_file.open("w", encoding="utf-8") as f:
+                json.dump(full_results, f, indent=2)
+
+            temp_input.unlink(missing_ok=True)
+            temp_output.unlink(missing_ok=True)
+            cache.save_cache()
+            return True, time.time() - start, ""
+        except Exception as exc:
+            return False, time.time() - start, str(exc)
+
+    def _run_egress_table_reduced_nonoptimized(
+        self,
+        *,
+        fsm_file: Path,
+        runtime_file: Path,
+        input_states: Path,
+        table_name: str,
+        output_file: Path,
+        fsm_data: Dict[str, Any] | None = None,
+        heartbeat_label: str | None = None,
+    ) -> Tuple[bool, float, str]:
+        start = time.time()
+
+        if not self._ensure_table_cache_class():
+            return self._run_egress_table(
+                fsm_file=fsm_file,
+                runtime_file=runtime_file,
+                input_states=input_states,
+                table_name=table_name,
+                output_file=output_file,
+                heartbeat_label=heartbeat_label,
+            )
+
+        try:
+            if fsm_data is None:
+                with fsm_file.open("r", encoding="utf-8") as f:
+                    fsm_data = json.load(f)
+
+            with input_states.open("r", encoding="utf-8") as f:
+                original_states = json.load(f)
+            if not isinstance(original_states, list):
+                original_states = []
+
+            if not original_states:
+                output_file.parent.mkdir(parents=True, exist_ok=True)
+                with output_file.open("w", encoding="utf-8") as f:
+                    json.dump([], f)
+                return True, time.time() - start, ""
+
+            pipeline = next((p for p in fsm_data.get("pipelines", []) if p.get("name") == "egress"), None)
+            if pipeline is None:
+                return self._run_egress_table(
+                    fsm_file=fsm_file,
+                    runtime_file=runtime_file,
+                    input_states=input_states,
+                    table_name=table_name,
+                    output_file=output_file,
+                    heartbeat_label=heartbeat_label,
+                )
+
+            table_def = next((t for t in pipeline.get("tables", []) if t.get("name") == table_name), None)
+            if table_def is None:
+                return self._run_egress_table(
+                    fsm_file=fsm_file,
+                    runtime_file=runtime_file,
+                    input_states=input_states,
+                    table_name=table_name,
+                    output_file=output_file,
+                    heartbeat_label=heartbeat_label,
+                )
+
+            hash_helper = self._table_execution_cache_cls(None)
+            relevant_fields = hash_helper._extract_relevant_fields(table_def, fsm_data)
+
+            unique_states: List[Dict[str, Any]] = []
+            unique_hashes: List[str] = []
+            state_hashes: List[str] = []
+            seen_hashes: set[str] = set()
+
+            for state in original_states:
+                state_hash = hash_helper._compute_table_state_hash(state, table_name, relevant_fields)
+                state_hashes.append(state_hash)
+                if state_hash in seen_hashes:
+                    continue
+                seen_hashes.add(state_hash)
+                unique_hashes.append(state_hash)
+                unique_states.append(state)
+
+            temp_input = input_states.parent / f".temp_nonopt_{table_name}_{input_states.name}"
+            temp_output = output_file.parent / f".temp_nonopt_{table_name}_{output_file.name}"
+            with temp_input.open("w", encoding="utf-8") as f:
+                json.dump(unique_states, f)
+
+            ok, _, err = self._run_egress_table(
+                fsm_file=fsm_file,
+                runtime_file=runtime_file,
+                input_states=temp_input,
+                table_name=table_name,
+                output_file=temp_output,
+                heartbeat_label=None,
+            )
+            if not ok:
+                temp_input.unlink(missing_ok=True)
+                temp_output.unlink(missing_ok=True)
+                return False, time.time() - start, err
+
+            with temp_output.open("r", encoding="utf-8") as f:
+                processed_results = json.load(f)
+
+            hash_to_result: Dict[str, Dict[str, Any]] = {}
+            for idx, h in enumerate(unique_hashes):
+                if idx < len(processed_results):
+                    hash_to_result[h] = processed_results[idx]
+
+            expanded_results: List[Dict[str, Any]] = []
+            for orig_state, h in zip(original_states, state_hashes):
+                result = hash_to_result.get(h, orig_state)
+                if isinstance(result, dict):
+                    expanded = result.copy()
+                    expanded["description"] = orig_state.get("description", expanded.get("description", "Unknown"))
+                else:
+                    expanded = orig_state
+                expanded_results.append(expanded)
+
+            output_file.parent.mkdir(parents=True, exist_ok=True)
+            with output_file.open("w", encoding="utf-8") as f:
+                json.dump(expanded_results, f, indent=2)
+
+            temp_input.unlink(missing_ok=True)
+            temp_output.unlink(missing_ok=True)
+            return True, time.time() - start, ""
+        except Exception as exc:
+            return False, time.time() - start, str(exc)
+
     def _run_egress_table(
         self,
         fsm_file: Path,
@@ -525,13 +858,25 @@ class BenchmarkMenuRunner:
             table_name,
             str(output_file),
         ]
-        return run_command_with_heartbeat(cmd, cwd=RUN_SCRIPTS_DIR, timeout=1800, heartbeat_label=heartbeat_label)
+        return run_command_with_heartbeat(
+            cmd,
+            cwd=RUN_SCRIPTS_DIR,
+            timeout=STAGE_TIMEOUT_S,
+            heartbeat_label=heartbeat_label,
+            heartbeat_interval_s=HEARTBEAT_INTERVAL_S,
+        )
 
     def _run_deparser(
         self, fsm_file: Path, input_states: Path, output_file: Path, heartbeat_label: str | None = None
     ) -> Tuple[bool, float, str]:
         cmd = ["python3", str(RUN_DEPARSER), str(fsm_file), str(input_states), str(output_file)]
-        return run_command_with_heartbeat(cmd, cwd=RUN_SCRIPTS_DIR, timeout=1800, heartbeat_label=heartbeat_label)
+        return run_command_with_heartbeat(
+            cmd,
+            cwd=RUN_SCRIPTS_DIR,
+            timeout=STAGE_TIMEOUT_S,
+            heartbeat_label=heartbeat_label,
+            heartbeat_interval_s=HEARTBEAT_INTERVAL_S,
+        )
 
     def _load_ingress_paths(self, fsm_file: Path) -> List[List[str]]:
         try:
@@ -680,15 +1025,39 @@ class BenchmarkMenuRunner:
                 )
                 for path_idx, table_path in enumerate(paths)
             ]
+            pending = set(futures)
+            completed = 0
+            wait_start = time.time()
+            heartbeat_count = 0
+            while pending:
+                done, pending = concurrent.futures.wait(
+                    pending,
+                    timeout=HEARTBEAT_INTERVAL_S,
+                    return_when=concurrent.futures.FIRST_COMPLETED,
+                )
+                if not done:
+                    heartbeat_count += 1
+                    if not self.compact_logs or heartbeat_count % 3 == 0:
+                        elapsed = time.time() - wait_start
+                        print(
+                            "      ... Ingress parallel still running "
+                            f"({elapsed:.1f}s) [{completed}/{total_paths} paths done, {len(pending)} pending]"
+                        )
+                    continue
 
-            for future in concurrent.futures.as_completed(futures):
-                ok, path_time, final_state_file, err = future.result()
-                ingress_total += path_time
-                if ok and final_state_file is not None and final_state_file.exists():
-                    explored += 1
-                    final_state_files.append(final_state_file)
-                elif err:
-                    errors.append(err)
+                for future in done:
+                    completed += 1
+                    try:
+                        ok, path_time, final_state_file, err = future.result()
+                    except Exception as exc:
+                        errors.append(str(exc))
+                        continue
+                    ingress_total += path_time
+                    if ok and final_state_file is not None and final_state_file.exists():
+                        explored += 1
+                        final_state_files.append(final_state_file)
+                    elif err:
+                        errors.append(err)
 
         if explored == 0:
             err = errors[0] if errors else "No ingress path produced valid output."
@@ -756,15 +1125,39 @@ class BenchmarkMenuRunner:
                 )
                 for path_idx, table_path in enumerate(paths)
             ]
+            pending = set(futures)
+            completed = 0
+            wait_start = time.time()
+            heartbeat_count = 0
+            while pending:
+                done, pending = concurrent.futures.wait(
+                    pending,
+                    timeout=HEARTBEAT_INTERVAL_S,
+                    return_when=concurrent.futures.FIRST_COMPLETED,
+                )
+                if not done:
+                    heartbeat_count += 1
+                    if not self.compact_logs or heartbeat_count % 3 == 0:
+                        elapsed = time.time() - wait_start
+                        print(
+                            "      ... Ingress parallel [opt] still running "
+                            f"({elapsed:.1f}s) [{completed}/{total_paths} paths done, {len(pending)} pending]"
+                        )
+                    continue
 
-            for future in concurrent.futures.as_completed(futures):
-                ok, path_time, final_state_file, err = future.result()
-                ingress_total += path_time
-                if ok and final_state_file is not None and final_state_file.exists():
-                    explored += 1
-                    final_state_files.append(final_state_file)
-                elif err:
-                    errors.append(err)
+                for future in done:
+                    completed += 1
+                    try:
+                        ok, path_time, final_state_file, err = future.result()
+                    except Exception as exc:
+                        errors.append(str(exc))
+                        continue
+                    ingress_total += path_time
+                    if ok and final_state_file is not None and final_state_file.exists():
+                        explored += 1
+                        final_state_files.append(final_state_file)
+                    elif err:
+                        errors.append(err)
 
         if explored == 0:
             err = errors[0] if errors else "No ingress path produced valid output."
@@ -1224,7 +1617,7 @@ class BenchmarkMenuRunner:
             topology_file = Path(meta["topology_file"])
             runtime_file = Path(meta["runtime_file"])
             build_dir = gen_dir / f"{meta['id']}_build"
-            print("  - Compiling P4...")
+            self._vprint("  - Compiling P4...")
             compile_ok, compile_time, compile_err, fsm_file = self._compile(p4_file, build_dir)
             if not compile_ok:
                 print(f"  [X] Compile failed in {compile_time:.3f}s: {compile_err}")
@@ -1243,11 +1636,14 @@ class BenchmarkMenuRunner:
                     }
                 )
                 continue
-            print(f"  [OK] Compile completed in {compile_time:.3f}s")
+            self._vprint(f"  [OK] Compile completed in {compile_time:.3f}s")
 
             for run_number in range(1, runs + 1):
                 run_start = time.time()
-                print(f"    [RUN {run_number}/{runs}] Running parser...")
+                if self.compact_logs:
+                    print(f"    [RUN {run_number}/{runs}] started")
+                else:
+                    print(f"    [RUN {run_number}/{runs}] Running parser...")
                 parser_out = build_dir / f"full_parser_run{run_number}.json"
                 parser_ok, parser_time, parser_err = self._run_parser(
                     fsm_file,
@@ -1282,7 +1678,7 @@ class BenchmarkMenuRunner:
                         }
                     )
                     continue
-                print(f"    [OK] Parser in {parser_time:.3f}s (states={parser_states_out})")
+                self._vprint(f"    [OK] Parser in {parser_time:.3f}s (states={parser_states_out})")
 
                 current_snapshot = parser_out
                 ingress_total = 0.0
@@ -1290,7 +1686,7 @@ class BenchmarkMenuRunner:
                 run_success = True
                 error_msg = ""
                 if optimized:
-                    print("      [Ingress] Running path-level parallel execution (optimized mode with cache)...")
+                    self._vprint("      [Ingress] Running path-level parallel execution (optimized mode with cache)...")
                     (
                         ingress_ok,
                         ingress_total,
@@ -1315,12 +1711,12 @@ class BenchmarkMenuRunner:
                         )
                     else:
                         current_snapshot = merged_snapshot
-                        print(
+                        self._vprint(
                             f"      [OK] Ingress parallel completed (aggregated table-time {ingress_total:.3f}s) "
                             f"({explored_paths}/{total_paths} paths explored)"
                         )
                 else:
-                    print("      [Ingress] Running path-level parallel execution (non-optimized mode)...")
+                    self._vprint("      [Ingress] Running path-level parallel execution (non-optimized mode)...")
                     (
                         ingress_ok,
                         ingress_total,
@@ -1345,24 +1741,42 @@ class BenchmarkMenuRunner:
                         )
                     else:
                         current_snapshot = merged_snapshot
-                        print(
+                        self._vprint(
                             f"      [OK] Ingress parallel completed (aggregated table-time {ingress_total:.3f}s) "
                             f"({explored_paths}/{total_paths} paths explored)"
                         )
 
                 if run_success:
+                    fsm_data_for_egress_cache: Dict[str, Any] | None = None
+                    try:
+                        with fsm_file.open("r", encoding="utf-8") as f:
+                            fsm_data_for_egress_cache = json.load(f)
+                    except Exception:
+                        fsm_data_for_egress_cache = None
                     for idx in range(egress_tables):
                         table_name = f"MyEgress.egress_table_{idx}"
                         table_out = build_dir / f"full_run{run_number}_egress_{idx}.json"
-                        print(f"      [Egress {idx + 1}/{egress_tables}] {table_name}...")
-                        ok, duration, err = self._run_egress_table(
-                            fsm_file=fsm_file,
-                            runtime_file=runtime_file,
-                            input_states=current_snapshot,
-                            table_name=table_name,
-                            output_file=table_out,
-                            heartbeat_label=f"Egress {idx + 1}/{egress_tables} ({table_name})",
-                        )
+                        self._vprint(f"      [Egress {idx + 1}/{egress_tables}] {table_name}...")
+                        if optimized:
+                            ok, duration, err = self._run_egress_table_cached_legacy(
+                                fsm_file=fsm_file,
+                                runtime_file=runtime_file,
+                                input_states=current_snapshot,
+                                table_name=table_name,
+                                output_file=table_out,
+                                run_number=run_number,
+                                fsm_data=fsm_data_for_egress_cache,
+                            )
+                        else:
+                            ok, duration, err = self._run_egress_table_reduced_nonoptimized(
+                                fsm_file=fsm_file,
+                                runtime_file=runtime_file,
+                                input_states=current_snapshot,
+                                table_name=table_name,
+                                output_file=table_out,
+                                fsm_data=fsm_data_for_egress_cache,
+                                heartbeat_label=f"Egress {idx + 1}/{egress_tables} ({table_name})",
+                            )
                         egress_total += duration
                         if table_out.exists():
                             current_snapshot = table_out
@@ -1372,9 +1786,9 @@ class BenchmarkMenuRunner:
                             print(f"      [X] Failed in {duration:.3f}s: {error_msg}")
                             break
                         if ok:
-                            print(f"      [OK] {duration:.3f}s")
+                            self._vprint(f"      [OK] {duration:.3f}s")
                         else:
-                            print(
+                            self._vprint(
                                 f"      [!] Returned an error in {duration:.3f}s, "
                                 "but partial output was generated; continuing."
                             )
@@ -1396,7 +1810,7 @@ class BenchmarkMenuRunner:
                             print(f"      [WARN] Deparser optimization failed: {exc}. Using original states.")
                             deparser_input = current_snapshot
                             deparser_opt_map = None
-                    print("      [Deparser] Running...")
+                    self._vprint("      [Deparser] Running...")
                     deparser_ok, deparser_time, deparser_err = self._run_deparser(
                         fsm_file=fsm_file,
                         input_states=deparser_input,
@@ -1426,7 +1840,7 @@ class BenchmarkMenuRunner:
                                 deparser_out_states = json_list_size(deparser_out)
                         else:
                             deparser_out_states = json_list_size(deparser_out)
-                        print(
+                        self._vprint(
                             f"      [OK] {deparser_time:.3f}s "
                             f"(states={deparser_out_states})"
                         )
@@ -1489,6 +1903,11 @@ def print_menu() -> None:
 def main() -> None:
     runner = BenchmarkMenuRunner()
     print(f"Results will be saved in: {OUTPUT_ROOT}")
+    if COMPACT_LOGS:
+        print(
+            "Log mode: compact "
+            "(set P4SYMTEST_BENCH_COMPACT_LOGS=0 for detailed logs)."
+        )
     while True:
         print_menu()
         choice = input("Choose an option: ").strip()
