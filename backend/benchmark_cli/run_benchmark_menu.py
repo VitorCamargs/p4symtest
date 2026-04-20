@@ -9,6 +9,7 @@ Results are saved in /app/workspace/benchmark_runs.
 from __future__ import annotations
 
 import csv
+import concurrent.futures
 import json
 import os
 import subprocess
@@ -220,6 +221,11 @@ class BenchmarkMenuRunner:
         self._optimized_helpers_available = False
         self._optimize_and_process_deparser: Callable[[List[Dict], Path, int], Tuple[Path, Dict[str, Any]]] | None = None
         self._expand_deparser_results: Callable[[Path, Dict[str, Any], Path, int], Path] | None = None
+        self._table_execution_cache_cls: Any | None = None
+        self._optimize_table_input: Any = None
+        self._optimized_table_caches: Dict[str, Any] = {}
+        self._table_cache_dir = WORKSPACE_DIR / ".table_cache"
+        self._table_cache_dir.mkdir(parents=True, exist_ok=True)
 
     def _load_optimized_helpers(self) -> bool:
         if self._optimized_helpers_checked:
@@ -227,9 +233,6 @@ class BenchmarkMenuRunner:
 
         self._optimized_helpers_checked = True
 
-        if not RUN_TABLE_WITH_CACHE.exists():
-            print(f"[WARN] Optimized mode unavailable: script not found: {RUN_TABLE_WITH_CACHE}")
-            return False
         if not DEPARSE_OPTIMIZER_MODULE.exists():
             print(f"[WARN] Optimized mode unavailable: module not found: {DEPARSE_OPTIMIZER_MODULE}")
             return False
@@ -242,14 +245,26 @@ class BenchmarkMenuRunner:
 
         try:
             from deparser_optimizer import expand_deparser_results, optimize_and_process_deparser
+            from table_execution_cache import TableExecutionCache, optimize_table_input
 
             self._optimize_and_process_deparser = optimize_and_process_deparser
             self._expand_deparser_results = expand_deparser_results
+            self._table_execution_cache_cls = TableExecutionCache
+            self._optimize_table_input = optimize_table_input
             self._optimized_helpers_available = True
             return True
         except Exception as exc:
             print(f"[WARN] Could not load optimized-mode helpers: {exc}")
             return False
+
+    def _get_table_cache(self, table_name: str, run_number: int) -> Any:
+        if self._table_execution_cache_cls is None:
+            raise RuntimeError("optimized table cache helper is unavailable")
+        cache_key = f"{table_name}_run{run_number}"
+        if cache_key not in self._optimized_table_caches:
+            cache_file = self._table_cache_dir / f"{cache_key}.json"
+            self._optimized_table_caches[cache_key] = self._table_execution_cache_cls(cache_file)
+        return self._optimized_table_caches[cache_key]
 
     def _optimized_env(self) -> Dict[str, str]:
         env = os.environ.copy()
@@ -330,6 +345,163 @@ class BenchmarkMenuRunner:
             env=self._optimized_env(),
         )
 
+    def _run_ingress_table_cached_legacy(
+        self,
+        *,
+        fsm_file: Path,
+        topology_file: Path,
+        runtime_file: Path,
+        input_states: Path,
+        table_name: str,
+        output_file: Path,
+        run_number: int,
+        fsm_data: Dict[str, Any] | None = None,
+    ) -> Tuple[bool, float, str]:
+        start = time.time()
+        if self._optimize_table_input is None:
+            return False, 0.0, "optimized cache helpers are unavailable"
+
+        try:
+            if fsm_data is None:
+                with fsm_file.open("r", encoding="utf-8") as f:
+                    fsm_data = json.load(f)
+
+            with input_states.open("r", encoding="utf-8") as f:
+                original_states = json.load(f)
+            if not isinstance(original_states, list):
+                original_states = []
+
+            if not original_states:
+                output_file.parent.mkdir(parents=True, exist_ok=True)
+                with output_file.open("w", encoding="utf-8") as f:
+                    json.dump([], f)
+                return True, time.time() - start, ""
+
+            cache = self._get_table_cache(table_name, run_number)
+
+            pipeline_name = "ingress" if "ingress" in table_name.lower() else "egress"
+            pipeline = next((p for p in fsm_data.get("pipelines", []) if p.get("name") == pipeline_name), None)
+            if pipeline is None:
+                return self._run_ingress_table(
+                    fsm_file=fsm_file,
+                    topology_file=topology_file,
+                    runtime_file=runtime_file,
+                    input_states=input_states,
+                    table_name=table_name,
+                    output_file=output_file,
+                    heartbeat_label=None,
+                )
+
+            table_def = next((t for t in pipeline.get("tables", []) if t.get("name") == table_name), None)
+            if table_def is None:
+                return self._run_ingress_table(
+                    fsm_file=fsm_file,
+                    topology_file=topology_file,
+                    runtime_file=runtime_file,
+                    input_states=input_states,
+                    table_name=table_name,
+                    output_file=output_file,
+                    heartbeat_label=None,
+                )
+
+            cached_results: List[Tuple[int, Dict[str, Any]]] = []
+            states_to_process: List[Tuple[int, Dict[str, Any]]] = []
+            for idx, state in enumerate(original_states):
+                hit, cached_result = cache.lookup(state, table_name, table_def, fsm_data)
+                if hit:
+                    cached_results.append((idx, cached_result))
+                else:
+                    states_to_process.append((idx, state))
+
+            if not states_to_process:
+                final_results: List[Dict[str, Any]] = []
+                cache_map = {idx: res for idx, res in cached_results}
+                for idx, state in enumerate(original_states):
+                    cached = cache_map.get(idx)
+                    if cached:
+                        result = state.copy()
+                        result["field_updates"] = cached.get("field_updates", result.get("field_updates", {}))
+                        result["z3_constraints_smt2"] = cached.get(
+                            "new_constraints",
+                            result.get("z3_constraints_smt2", []),
+                        )
+                        result["was_cached"] = True
+                        final_results.append(result)
+                    else:
+                        final_results.append(state)
+                output_file.parent.mkdir(parents=True, exist_ok=True)
+                with output_file.open("w", encoding="utf-8") as f:
+                    json.dump(final_results, f, indent=2)
+                return True, time.time() - start, ""
+
+            states_only = [s for _, s in states_to_process]
+            unique_states, index_mapping = self._optimize_table_input(
+                states_only, table_name, table_def, fsm_data, cache
+            )
+
+            temp_input = input_states.parent / f".temp_{table_name}_{input_states.name}"
+            temp_output = output_file.parent / f".temp_{table_name}_{output_file.name}"
+            with temp_input.open("w", encoding="utf-8") as f:
+                json.dump(unique_states, f)
+
+            ok, _, err = self._run_ingress_table(
+                fsm_file=fsm_file,
+                topology_file=topology_file,
+                runtime_file=runtime_file,
+                input_states=temp_input,
+                table_name=table_name,
+                output_file=temp_output,
+                heartbeat_label=None,
+            )
+            if not ok:
+                temp_input.unlink(missing_ok=True)
+                temp_output.unlink(missing_ok=True)
+                return False, time.time() - start, err
+
+            with temp_output.open("r", encoding="utf-8") as f:
+                processed_results = json.load(f)
+
+            hash_to_result: Dict[str, Dict[str, Any]] = {}
+            for idx, state in enumerate(unique_states):
+                if idx < len(processed_results):
+                    result = processed_results[idx]
+                    state_hash = cache._compute_table_state_hash(
+                        state, table_name, cache.table_relevant_fields[table_name]
+                    )
+                    hash_to_result[state_hash] = result
+                    cache.store(state, result, table_name, table_def, fsm_data)
+
+            full_results: List[Dict[str, Any]] = []
+            processed_idx_map = {states_to_process[i][0]: i for i in range(len(states_to_process))}
+            for orig_idx, state in enumerate(original_states):
+                cached = next((r for i, r in cached_results if i == orig_idx), None)
+                if cached:
+                    result = state.copy()
+                    result["field_updates"] = cached.get("field_updates", result.get("field_updates", {}))
+                    result["z3_constraints_smt2"] = cached.get("new_constraints", result.get("z3_constraints_smt2", []))
+                    result["was_cached"] = True
+                else:
+                    proc_idx = processed_idx_map.get(orig_idx)
+                    if proc_idx is not None:
+                        state_hash = index_mapping.get(proc_idx)
+                        result = hash_to_result.get(state_hash, state).copy()
+                        result["description"] = state.get("description", "Unknown")
+                        result["was_cached"] = False
+                    else:
+                        result = state
+                full_results.append(result)
+
+            output_file.parent.mkdir(parents=True, exist_ok=True)
+            with output_file.open("w", encoding="utf-8") as f:
+                json.dump(full_results, f, indent=2)
+
+            temp_input.unlink(missing_ok=True)
+            temp_output.unlink(missing_ok=True)
+            cache.save_cache()
+            return True, time.time() - start, ""
+        except Exception as exc:
+            return False, time.time() - start, str(exc)
+
     def _run_egress_table(
         self,
         fsm_file: Path,
@@ -356,6 +528,262 @@ class BenchmarkMenuRunner:
     ) -> Tuple[bool, float, str]:
         cmd = ["python3", str(RUN_DEPARSER), str(fsm_file), str(input_states), str(output_file)]
         return run_command_with_heartbeat(cmd, cwd=RUN_SCRIPTS_DIR, timeout=1800, heartbeat_label=heartbeat_label)
+
+    def _load_ingress_paths(self, fsm_file: Path) -> List[List[str]]:
+        try:
+            with fsm_file.open("r", encoding="utf-8") as f:
+                fsm_data = json.load(f)
+        except Exception:
+            return []
+
+        ingress = next((p for p in fsm_data.get("pipelines", []) if p.get("name") == "ingress"), None)
+        if not ingress:
+            return []
+
+        tables = ingress.get("tables", [])
+        conditionals = ingress.get("conditionals", [])
+        table_by_name = {t.get("name"): t for t in tables if t.get("name")}
+        cond_by_name = {c.get("name"): c for c in conditionals if c.get("name")}
+        init_node = ingress.get("init_table")
+        paths: List[List[str]] = []
+
+        def explore(node_name: str | None, current_tables: List[str]) -> None:
+            if node_name is None:
+                paths.append(current_tables.copy())
+                return
+            table = table_by_name.get(node_name)
+            if table is not None:
+                explore(table.get("base_default_next"), current_tables + [node_name])
+                return
+            cond = cond_by_name.get(node_name)
+            if cond is not None:
+                explore(cond.get("true_next"), current_tables)
+                explore(cond.get("false_next"), current_tables)
+                return
+            # Unknown node: treat as terminal to avoid infinite recursion.
+            paths.append(current_tables.copy())
+
+        explore(init_node, [])
+        return paths
+
+    def _run_ingress_path_nonoptimized(
+        self,
+        *,
+        fsm_file: Path,
+        topology_file: Path,
+        runtime_file: Path,
+        parser_output: Path,
+        table_path: List[str],
+        build_dir: Path,
+        run_number: int,
+        path_idx: int,
+    ) -> Tuple[bool, float, Path | None, str]:
+        current_snapshot = parser_output
+        total_time = 0.0
+
+        if not table_path:
+            return True, total_time, parser_output, ""
+
+        for table_idx, table_name in enumerate(table_path):
+            table_out = build_dir / f"full_run{run_number}_path{path_idx}_ingress_{table_idx}.json"
+            ok, duration, err = self._run_ingress_table(
+                fsm_file=fsm_file,
+                topology_file=topology_file,
+                runtime_file=runtime_file,
+                input_states=current_snapshot,
+                table_name=table_name,
+                output_file=table_out,
+                heartbeat_label=None,
+            )
+            total_time += duration
+            if table_out.exists():
+                current_snapshot = table_out
+            if not ok and not table_out.exists():
+                return False, total_time, None, f"{table_name}: {err}"
+        return True, total_time, current_snapshot, ""
+
+    def _run_ingress_path_optimized(
+        self,
+        *,
+        fsm_file: Path,
+        topology_file: Path,
+        runtime_file: Path,
+        parser_output: Path,
+        table_path: List[str],
+        build_dir: Path,
+        run_number: int,
+        path_idx: int,
+        fsm_data: Dict[str, Any],
+    ) -> Tuple[bool, float, Path | None, str]:
+        current_snapshot = parser_output
+        total_time = 0.0
+
+        if not table_path:
+            return True, total_time, parser_output, ""
+
+        for table_idx, table_name in enumerate(table_path):
+            table_out = build_dir / f"full_run{run_number}_path{path_idx}_ingress_opt_{table_idx}.json"
+            ok, duration, err = self._run_ingress_table_cached_legacy(
+                fsm_file=fsm_file,
+                topology_file=topology_file,
+                runtime_file=runtime_file,
+                input_states=current_snapshot,
+                table_name=table_name,
+                output_file=table_out,
+                run_number=run_number,
+                fsm_data=fsm_data,
+            )
+            total_time += duration
+            if table_out.exists():
+                current_snapshot = table_out
+            if not ok and not table_out.exists():
+                return False, total_time, None, f"{table_name}: {err}"
+        return True, total_time, current_snapshot, ""
+
+    def _run_ingress_parallel_nonoptimized(
+        self,
+        *,
+        fsm_file: Path,
+        topology_file: Path,
+        runtime_file: Path,
+        parser_output: Path,
+        build_dir: Path,
+        run_number: int,
+    ) -> Tuple[bool, float, Path | None, str, int, int]:
+        paths = self._load_ingress_paths(fsm_file)
+        total_paths = len(paths)
+        if total_paths == 0:
+            return False, 0.0, None, "No ingress paths found in FSM.", 0, 0
+
+        max_workers = os.cpu_count() or 4
+        ingress_total = 0.0
+        explored = 0
+        final_state_files: List[Path] = []
+        errors: List[str] = []
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
+            futures = [
+                pool.submit(
+                    self._run_ingress_path_nonoptimized,
+                    fsm_file=fsm_file,
+                    topology_file=topology_file,
+                    runtime_file=runtime_file,
+                    parser_output=parser_output,
+                    table_path=table_path,
+                    build_dir=build_dir,
+                    run_number=run_number,
+                    path_idx=path_idx,
+                )
+                for path_idx, table_path in enumerate(paths)
+            ]
+
+            for future in concurrent.futures.as_completed(futures):
+                ok, path_time, final_state_file, err = future.result()
+                ingress_total += path_time
+                if ok and final_state_file is not None and final_state_file.exists():
+                    explored += 1
+                    final_state_files.append(final_state_file)
+                elif err:
+                    errors.append(err)
+
+        if explored == 0:
+            err = errors[0] if errors else "No ingress path produced valid output."
+            return False, ingress_total, None, err, total_paths, explored
+
+        merged_states: List[Dict[str, Any]] = []
+        for state_file in set(final_state_files):
+            try:
+                with state_file.open("r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, list):
+                    merged_states.extend(data)
+            except Exception:
+                continue
+
+        merged_output = build_dir / f"full_run{run_number}_ingress_merged.json"
+        with merged_output.open("w", encoding="utf-8") as f:
+            json.dump(merged_states, f, ensure_ascii=False, indent=2)
+
+        if explored != total_paths:
+            err_preview = "; ".join(errors[:3]) if errors else "Some paths failed."
+            return False, ingress_total, merged_output, err_preview, total_paths, explored
+        return True, ingress_total, merged_output, "", total_paths, explored
+
+    def _run_ingress_parallel_optimized(
+        self,
+        *,
+        fsm_file: Path,
+        topology_file: Path,
+        runtime_file: Path,
+        parser_output: Path,
+        build_dir: Path,
+        run_number: int,
+    ) -> Tuple[bool, float, Path | None, str, int, int]:
+        try:
+            with fsm_file.open("r", encoding="utf-8") as f:
+                fsm_data = json.load(f)
+        except Exception as exc:
+            return False, 0.0, None, f"Failed to load FSM for optimized ingress: {exc}", 0, 0
+
+        paths = self._load_ingress_paths(fsm_file)
+        total_paths = len(paths)
+        if total_paths == 0:
+            return False, 0.0, None, "No ingress paths found in FSM.", 0, 0
+
+        max_workers = os.cpu_count() or 4
+        ingress_total = 0.0
+        explored = 0
+        final_state_files: List[Path] = []
+        errors: List[str] = []
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
+            futures = [
+                pool.submit(
+                    self._run_ingress_path_optimized,
+                    fsm_file=fsm_file,
+                    topology_file=topology_file,
+                    runtime_file=runtime_file,
+                    parser_output=parser_output,
+                    table_path=table_path,
+                    build_dir=build_dir,
+                    run_number=run_number,
+                    path_idx=path_idx,
+                    fsm_data=fsm_data,
+                )
+                for path_idx, table_path in enumerate(paths)
+            ]
+
+            for future in concurrent.futures.as_completed(futures):
+                ok, path_time, final_state_file, err = future.result()
+                ingress_total += path_time
+                if ok and final_state_file is not None and final_state_file.exists():
+                    explored += 1
+                    final_state_files.append(final_state_file)
+                elif err:
+                    errors.append(err)
+
+        if explored == 0:
+            err = errors[0] if errors else "No ingress path produced valid output."
+            return False, ingress_total, None, err, total_paths, explored
+
+        merged_states: List[Dict[str, Any]] = []
+        for state_file in set(final_state_files):
+            try:
+                with state_file.open("r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, list):
+                    merged_states.extend(data)
+            except Exception:
+                continue
+
+        merged_output = build_dir / f"full_run{run_number}_ingress_opt_merged.json"
+        with merged_output.open("w", encoding="utf-8") as f:
+            json.dump(merged_states, f, ensure_ascii=False, indent=2)
+
+        if explored != total_paths:
+            err_preview = "; ".join(errors[:3]) if errors else "Some paths failed."
+            return False, ingress_total, merged_output, err_preview, total_paths, explored
+        return True, ingress_total, merged_output, "", total_paths, explored
 
     def _new_run_dirs(self, mode: str) -> Tuple[Path, Path]:
         run_dir = OUTPUT_ROOT / f"{mode}_{now_tag()}"
@@ -857,47 +1285,65 @@ class BenchmarkMenuRunner:
                 egress_total = 0.0
                 run_success = True
                 error_msg = ""
-
-                for idx in range(ingress_tables):
-                    table_name = f"MyIngress.ingress_table_{idx}"
-                    table_out = build_dir / f"full_run{run_number}_ingress_{idx}.json"
-                    print(f"      [Ingress {idx + 1}/{ingress_tables}] {table_name}...")
-                    if optimized:
-                        cache_file = build_dir / f"cache_run{run_number}_{table_name.replace('.', '_')}.json"
-                        ok, duration, err = self._run_ingress_table_cached(
-                            fsm_file=fsm_file,
-                            topology_file=topology_file,
-                            runtime_file=runtime_file,
-                            input_states=current_snapshot,
-                            table_name=table_name,
-                            output_file=table_out,
-                            cache_file=cache_file,
-                            heartbeat_label=f"Ingress {idx + 1}/{ingress_tables} ({table_name}) [cache]",
-                        )
-                    else:
-                        ok, duration, err = self._run_ingress_table(
-                            fsm_file=fsm_file,
-                            topology_file=topology_file,
-                            runtime_file=runtime_file,
-                            input_states=current_snapshot,
-                            table_name=table_name,
-                            output_file=table_out,
-                            heartbeat_label=f"Ingress {idx + 1}/{ingress_tables} ({table_name})",
-                        )
-                    ingress_total += duration
-                    if table_out.exists():
-                        current_snapshot = table_out
-                    if not ok and not table_out.exists():
+                if optimized:
+                    print("      [Ingress] Running path-level parallel execution (optimized mode with cache)...")
+                    (
+                        ingress_ok,
+                        ingress_total,
+                        merged_snapshot,
+                        ingress_err,
+                        total_paths,
+                        explored_paths,
+                    ) = self._run_ingress_parallel_optimized(
+                        fsm_file=fsm_file,
+                        topology_file=topology_file,
+                        runtime_file=runtime_file,
+                        parser_output=parser_out,
+                        build_dir=build_dir,
+                        run_number=run_number,
+                    )
+                    if not ingress_ok or merged_snapshot is None:
                         run_success = False
-                        error_msg = f"ingress {table_name}: {err}"
-                        print(f"      [X] Failed in {duration:.3f}s: {error_msg}")
-                        break
-                    if ok:
-                        print(f"      [OK] {duration:.3f}s")
-                    else:
+                        error_msg = f"ingress parallel (optimized): {ingress_err}"
                         print(
-                            f"      [!] Returned an error in {duration:.3f}s, "
-                            "but partial output was generated; continuing."
+                            f"      [X] Ingress parallel failed "
+                            f"({explored_paths}/{total_paths} paths): {error_msg}"
+                        )
+                    else:
+                        current_snapshot = merged_snapshot
+                        print(
+                            f"      [OK] Ingress parallel completed (aggregated table-time {ingress_total:.3f}s) "
+                            f"({explored_paths}/{total_paths} paths explored)"
+                        )
+                else:
+                    print("      [Ingress] Running path-level parallel execution (non-optimized mode)...")
+                    (
+                        ingress_ok,
+                        ingress_total,
+                        merged_snapshot,
+                        ingress_err,
+                        total_paths,
+                        explored_paths,
+                    ) = self._run_ingress_parallel_nonoptimized(
+                        fsm_file=fsm_file,
+                        topology_file=topology_file,
+                        runtime_file=runtime_file,
+                        parser_output=parser_out,
+                        build_dir=build_dir,
+                        run_number=run_number,
+                    )
+                    if not ingress_ok or merged_snapshot is None:
+                        run_success = False
+                        error_msg = f"ingress parallel: {ingress_err}"
+                        print(
+                            f"      [X] Ingress parallel failed "
+                            f"({explored_paths}/{total_paths} paths): {error_msg}"
+                        )
+                    else:
+                        current_snapshot = merged_snapshot
+                        print(
+                            f"      [OK] Ingress parallel completed (aggregated table-time {ingress_total:.3f}s) "
+                            f"({explored_paths}/{total_paths} paths explored)"
                         )
 
                 if run_success:
