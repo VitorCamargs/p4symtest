@@ -66,6 +66,65 @@ def parse_field_update_expr(expr_str, decls, target_var):
         raise ValueError("Could not isolate field-update expression with matching sort")
     return candidate
 
+
+def _is_quiet() -> bool:
+    raw = os.environ.get("P4SYMTEST_BENCH_QUIET", "0").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _vprint(*args, **kwargs):
+    if not _is_quiet():
+        print(*args, **kwargs)
+
+
+def _state_field_key(field_str):
+    parts = field_str.split('.')
+    if len(parts) == 2:
+        return tuple(parts)
+    if len(parts) == 3:
+        return (parts[1], parts[2])
+    return None
+
+
+def _parse_assertion_expr(expr_smt2, decls, parse_cache):
+    if expr_smt2 in parse_cache:
+        return parse_cache[expr_smt2]
+    wrapped = f"(assert {expr_smt2})"
+    with suppress_c_stdout_stderr():
+        parsed = parse_smt2_string(wrapped, decls=decls)
+    if isinstance(parsed, z3.AstVector):
+        if len(parsed) != 1:
+            raise ValueError(f"SMT assertion produced {len(parsed)} assertions (expected 1)")
+        parsed = parsed[0]
+    if not isinstance(parsed, z3.BoolRef):
+        raise ValueError(f"SMT assertion is not BoolRef: {type(parsed).__name__}")
+    parse_cache[expr_smt2] = parsed
+    return parsed
+
+
+def _parse_state_constraints(constraints_smt2, decls, parse_cache):
+    parsed_constraints = []
+    for expr_smt2 in constraints_smt2:
+        parsed_constraints.append(_parse_assertion_expr(expr_smt2, decls, parse_cache))
+    return parsed_constraints
+
+
+def _load_state_field_update_constraints(state_field_updates, fields, decls, field_update_cache):
+    constraints = []
+    for field_str, expr_str in state_field_updates.items():
+        field_key = _state_field_key(field_str)
+        if not field_key or field_key not in fields:
+            continue
+        target_var = fields[field_key]
+        cache_key = (field_key[0], field_key[1], expr_str)
+        if cache_key in field_update_cache:
+            parsed_expr = field_update_cache[cache_key]
+        else:
+            parsed_expr = parse_field_update_expr(expr_str, decls=decls, target_var=target_var)
+            field_update_cache[cache_key] = parsed_expr
+        constraints.append(target_var == parsed_expr)
+    return constraints
+
 # --- Ponto de Entrada Principal ---
 if __name__ == "__main__":
     if len(sys.argv) != 4:
@@ -76,9 +135,9 @@ if __name__ == "__main__":
     input_states_file = sys.argv[2]
     output_file = sys.argv[3]
 
-    print(f"--- Deparser: Carregando FSM de: {fsm_file} ---")
-    print(f"--- Deparser: Carregando Estados de: {input_states_file} ---")
-    print(f"--- Deparser: Salvando Saída em: {output_file} ---")
+    _vprint(f"--- Deparser: Carregando FSM de: {fsm_file} ---")
+    _vprint(f"--- Deparser: Carregando Estados de: {input_states_file} ---")
+    _vprint(f"--- Deparser: Salvando Saída em: {output_file} ---")
 
     fsm_data = load_json(fsm_file)
     input_states = load_json(input_states_file)
@@ -113,34 +172,35 @@ if __name__ == "__main__":
 
     declarations_smt2 = [f"(declare-const {var.sexpr()} (_ BitVec {var.sort().size()}))" for var in fields.values()]
 
-    print(f"--- Analisando Deparser '{deparser_def.get('name', 'deparser')}' ---")
-    print(f"Ordem de emissão P4: {', '.join(deparser_order)}")
+    _vprint(f"--- Analisando Deparser '{deparser_def.get('name', 'deparser')}' ---")
+    _vprint(f"Ordem de emissão P4: {', '.join(deparser_order)}")
 
     analysis_results = []
+    decls = {var.sexpr(): var for var in fields.values()}
+    parser_constraint_cache = {}
+    field_update_cache = {}
 
     for i, state in enumerate(input_states):
-        print(f"\nAnalisando para o Estado de Entrada #{i} ({state.get('description', 'Sem descrição')})")
+        _vprint(f"\nAnalisando para o Estado de Entrada #{i} ({state.get('description', 'Sem descrição')})")
 
         state_history = state.get("history", ["Desconhecido"])
         state_constraints_smt2 = state.get("z3_constraints_smt2", [])
         state_field_updates = state.get("field_updates", {})
 
-        parser_constraints_smt2_asserts = [f"(assert {s})" for s in state_constraints_smt2]
-        full_script = "\n".join(declarations_smt2) + "\n" + "\n".join(parser_constraints_smt2_asserts)
-
         solver = Solver()
         is_satisfiable = False
         try:
-            with suppress_c_stdout_stderr():
-                solver.from_string(full_script)
+            parser_constraints = _parse_state_constraints(state_constraints_smt2, decls, parser_constraint_cache)
+            if parser_constraints:
+                solver.add(*parser_constraints)
             check_result = solver.check()
             is_satisfiable = check_result == sat
             if check_result == unknown:
-                 print("  - AVISO: Solver retornou 'unknown'. Assumindo satisfatível.")
+                 _vprint("  - AVISO: Solver retornou 'unknown'. Assumindo satisfatível.")
                  is_satisfiable = True
 
         except Exception as e:
-            print(f"  - ERRO: Falha SMT: {e}")
+            _vprint(f"  - ERRO: Falha SMT: {e}")
             state_result = {
                 "input_state": state.get('description', f'Erro SMT no estado {i}'), 
                 "input_state_index": i,
@@ -202,29 +262,31 @@ if __name__ == "__main__":
             state_result['_group_size'] = state['_group_size']
 
         if not is_satisfiable:
-            print("  - AVISO: Estado insatisfatório. Pulando emissão.")
+            _vprint("  - AVISO: Estado insatisfatório. Pulando emissão.")
             analysis_results.append(state_result)
             continue
 
-        print("  - Estado satisfatório. Verificando emissão:")
+        _vprint("  - Estado satisfatório. Verificando emissão:")
 
         if state_field_updates:
-             decls = {var.sexpr(): var for key, var in fields.items()}
-             for field_str, expr_str in state_field_updates.items():
-                 parts=field_str.split('.')
-                 field_key=tuple(parts) if len(parts)==2 else (parts[1],parts[2]) if len(parts)==3 else None
-                 if field_key and field_key in fields:
-                     try:
-                         parsed_expr = parse_field_update_expr(expr_str, decls=decls, target_var=fields[field_key])
-                         update_constraint = (fields[field_key] == parsed_expr)
-                         solver.add(update_constraint)
-                     except Exception as e: 
-                         print(f"    - Erro field_update {field_str}: {e}")
+             try:
+                 update_constraints = _load_state_field_update_constraints(
+                     state_field_updates,
+                     fields,
+                     decls,
+                     field_update_cache,
+                 )
+                 if update_constraints:
+                     solver.add(*update_constraints)
+             except Exception as e:
+                 _vprint(f"    - Erro field_update: {e}")
 
+        bv1 = BitVecVal(1, 1)
+        bv0 = BitVecVal(0, 1)
         for header_name in deparser_order:
             valid_field = fields.get((header_name, '$valid$'))
             if valid_field is None:
-                print(f"    - AVISO: {header_name}.$valid$ não definido.")
+                _vprint(f"    - AVISO: {header_name}.$valid$ não definido.")
                 state_result["emission_status"].append({
                     "header": header_name, 
                     "status": "Erro: $valid$ não definido"
@@ -232,41 +294,35 @@ if __name__ == "__main__":
                 continue
 
             emission_status = "Desconhecido"
-            solver.push()
             try: 
-                solver.add(valid_field == 1)
-                check_can_emit = solver.check()
+                check_can_emit = solver.check(valid_field == bv1)
             except Exception as e: 
-                print(f"    - ERRO Z3 {header_name}.$valid$ == 1: {e}")
+                _vprint(f"    - ERRO Z3 {header_name}.$valid$ == 1: {e}")
                 check_can_emit = unknown
-            solver.pop()
 
             if check_can_emit == sat:
-                solver.push()
                 try: 
-                    solver.add(valid_field == 0)
-                    check_can_not_emit = solver.check()
+                    check_can_not_emit = solver.check(valid_field == bv0)
                 except Exception as e: 
-                    print(f"    - ERRO Z3 {header_name}.$valid$ == 0: {e}")
+                    _vprint(f"    - ERRO Z3 {header_name}.$valid$ == 0: {e}")
                     check_can_not_emit = unknown
-                solver.pop()
 
                 if check_can_not_emit == sat: 
                     emission_status = "Condicional"
-                    print(f"    - {header_name}: EMITIDO (Condicional)")
+                    _vprint(f"    - {header_name}: EMITIDO (Condicional)")
                 elif check_can_not_emit == unsat: 
                     emission_status = "Sempre"
-                    print(f"    - {header_name}: EMITIDO (Sempre)")
+                    _vprint(f"    - {header_name}: EMITIDO (Sempre)")
                 else: 
                     emission_status = "Desconhecido (Erro Z3)"
-                    print(f"    - {header_name}: Status Desconhecido (!=1)")
+                    _vprint(f"    - {header_name}: Status Desconhecido (!=1)")
 
             elif check_can_emit == unsat: 
                 emission_status = "Nunca"
-                print(f"    - {header_name}: NÃO EMITIDO (Inválido)")
+                _vprint(f"    - {header_name}: NÃO EMITIDO (Inválido)")
             else: 
                 emission_status = "Desconhecido (Erro Z3)"
-                print(f"    - {header_name}: Status Desconhecido (==1)")
+                _vprint(f"    - {header_name}: Status Desconhecido (==1)")
 
             state_result["emission_status"].append({
                 "header": header_name, 
@@ -280,8 +336,8 @@ if __name__ == "__main__":
         output_path.parent.mkdir(parents=True, exist_ok=True)
         with open(output_path, 'w', encoding='utf-8') as f:
             json.dump(analysis_results, f, indent=2)
-        print(f"\nAnálise do Deparser concluída. {len(analysis_results)} estados analisados.")
-        print(f"Resultados salvos em '{output_path}'.")
+        _vprint(f"\nAnálise do Deparser concluída. {len(analysis_results)} estados analisados.")
+        _vprint(f"Resultados salvos em '{output_path}'.")
     except Exception as e:
         print(f"\nErro ao salvar resultados em '{output_path}': {e}")
         exit(1)
