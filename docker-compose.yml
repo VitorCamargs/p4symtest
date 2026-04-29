@@ -1,3 +1,92 @@
+x-llm-analyzer-env: &llm-analyzer-env
+  QDRANT_URL: ${QDRANT_URL:-http://qdrant:6333}
+  LLAMA_SERVER_URL: ${LLAMA_SERVER_URL:-http://llama-server:8080}
+  LLM_TEMPERATURE: ${LLM_TEMPERATURE:-0.1}
+  RAG_COLLECTION: ${RAG_COLLECTION:-p4symtest-warnings}
+
+x-llm-profile-cpu-local: &llm-profile-cpu-local
+  LLM_RUNTIME_PROFILE: cpu-local
+  LLAMA_MODEL: ${CPU_LOCAL_LLAMA_MODEL:-qwen2.5-coder-3b-instruct-q4_k_m}
+  LLAMA_CONTEXT_SIZE: ${CPU_LOCAL_LLAMA_CONTEXT_SIZE:-4096}
+  LLAMA_THREADS: ${CPU_LOCAL_LLAMA_THREADS:-4}
+  LLAMA_GPU_LAYERS: ${CPU_LOCAL_LLAMA_GPU_LAYERS:-0}
+  LLM_REQUEST_TIMEOUT_SECONDS: ${CPU_LOCAL_LLM_REQUEST_TIMEOUT_SECONDS:-60}
+  LLM_MAX_OUTPUT_TOKENS: ${CPU_LOCAL_LLM_MAX_OUTPUT_TOKENS:-512}
+
+x-llm-profile-mac-m4: &llm-profile-mac-m4
+  LLM_RUNTIME_PROFILE: mac-m4
+  LLAMA_MODEL: ${MAC_M4_LLAMA_MODEL:-qwen2.5-coder-3b-instruct-q4_k_m}
+  LLAMA_CONTEXT_SIZE: ${MAC_M4_LLAMA_CONTEXT_SIZE:-8192}
+  LLAMA_THREADS: ${MAC_M4_LLAMA_THREADS:-8}
+  LLAMA_GPU_LAYERS: ${MAC_M4_LLAMA_GPU_LAYERS:-0}
+  LLM_REQUEST_TIMEOUT_SECONDS: ${MAC_M4_LLM_REQUEST_TIMEOUT_SECONDS:-60}
+  LLM_MAX_OUTPUT_TOKENS: ${MAC_M4_LLM_MAX_OUTPUT_TOKENS:-768}
+
+x-llm-profile-local-gpu: &llm-profile-local-gpu
+  LLM_RUNTIME_PROFILE: local-gpu
+  LLAMA_MODEL: ${LOCAL_GPU_LLAMA_MODEL:-qwen2.5-coder-7b-instruct-q4_k_m}
+  LLAMA_CONTEXT_SIZE: ${LOCAL_GPU_LLAMA_CONTEXT_SIZE:-8192}
+  LLAMA_THREADS: ${LOCAL_GPU_LLAMA_THREADS:-8}
+  LLAMA_GPU_LAYERS: ${LOCAL_GPU_LLAMA_GPU_LAYERS:-32}
+  LLM_REQUEST_TIMEOUT_SECONDS: ${LOCAL_GPU_LLM_REQUEST_TIMEOUT_SECONDS:-60}
+  LLM_MAX_OUTPUT_TOKENS: ${LOCAL_GPU_LLM_MAX_OUTPUT_TOKENS:-1024}
+
+x-llm-profile-vps-light: &llm-profile-vps-light
+  LLM_RUNTIME_PROFILE: vps-light
+  LLAMA_MODEL: ${VPS_LIGHT_LLAMA_MODEL:-qwen2.5-coder-1.5b-instruct-q4_k_m}
+  LLAMA_CONTEXT_SIZE: ${VPS_LIGHT_LLAMA_CONTEXT_SIZE:-2048}
+  LLAMA_THREADS: ${VPS_LIGHT_LLAMA_THREADS:-2}
+  LLAMA_GPU_LAYERS: ${VPS_LIGHT_LLAMA_GPU_LAYERS:-0}
+  LLM_REQUEST_TIMEOUT_SECONDS: ${VPS_LIGHT_LLM_REQUEST_TIMEOUT_SECONDS:-90}
+  LLM_MAX_OUTPUT_TOKENS: ${VPS_LIGHT_LLM_MAX_OUTPUT_TOKENS:-384}
+
+x-llm-analyzer-common: &llm-analyzer-common
+  build:
+    context: ./llm-analyzer
+    dockerfile: Dockerfile
+  working_dir: /srv/llm-analyzer
+  expose:
+    - "8000"
+  volumes:
+    - ./llm-analyzer:/srv/llm-analyzer
+  networks:
+    p4symtest-network:
+      aliases:
+        - llm-analyzer
+  healthcheck:
+    test:
+      [
+        "CMD-SHELL",
+        "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=5)\"",
+      ]
+    interval: 30s
+    timeout: 10s
+    retries: 3
+    start_period: 20s
+
+x-llama-server-common: &llama-server-common
+  expose:
+    - "8080"
+  volumes:
+    - type: bind
+      source: ${LLM_MODELS_PATH:-/tmp/p4symtest-models}
+      target: /models
+      read_only: true
+  networks:
+    p4symtest-network:
+      aliases:
+        - llama-server
+  healthcheck:
+    test:
+      [
+        "CMD-SHELL",
+        "curl -fsS http://localhost:8080/health >/dev/null || wget -qO- http://localhost:8080/health >/dev/null",
+      ]
+    interval: 30s
+    timeout: 10s
+    retries: 5
+    start_period: 60s
+
 services:
   # Backend Flask com p4c
   backend:
@@ -12,6 +101,8 @@ services:
       - ./backend:/app  # <-- Ainda montamos para live-reload do código
       - ./backend/workspace:/app/workspace
     # As ENVs agora vêm do Dockerfile, mas podem ser deixadas aqui também
+    environment:
+      - LLM_ANALYZER_URL=${LLM_ANALYZER_URL:-http://llm-analyzer:8000}
     networks:
       - p4symtest-network
     healthcheck:
@@ -44,9 +135,193 @@ services:
     stdin_open: true
     tty: true
 
+  # CPU-first LLM/RAG profile
+  llm-analyzer:
+    <<: *llm-analyzer-common
+    profiles:
+      - cpu-local
+    container_name: p4symtest-llm-analyzer
+    depends_on:
+      llama-server:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+    environment:
+      <<:
+        - *llm-analyzer-env
+        - *llm-profile-cpu-local
+
+  llama-server:
+    <<: *llama-server-common
+    image: ${LLAMA_SERVER_IMAGE:-ghcr.io/ggml-org/llama.cpp:server}
+    profiles:
+      - cpu-local
+    container_name: p4symtest-llama-server
+    environment:
+      <<: *llm-profile-cpu-local
+    command:
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8080"
+      - --model
+      - /models/${CPU_LOCAL_LLAMA_MODEL_FILE:-qwen2.5-coder-3b-instruct-q4_k_m.gguf}
+      - --ctx-size
+      - "${CPU_LOCAL_LLAMA_CONTEXT_SIZE:-4096}"
+      - --threads
+      - "${CPU_LOCAL_LLAMA_THREADS:-4}"
+      - --n-gpu-layers
+      - "${CPU_LOCAL_LLAMA_GPU_LAYERS:-0}"
+
+  llm-analyzer-mac-m4:
+    <<: *llm-analyzer-common
+    profiles:
+      - mac-m4
+    container_name: p4symtest-llm-analyzer-mac-m4
+    depends_on:
+      llama-server-mac-m4:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+    environment:
+      <<:
+        - *llm-analyzer-env
+        - *llm-profile-mac-m4
+
+  llama-server-mac-m4:
+    <<: *llama-server-common
+    image: ${LLAMA_SERVER_IMAGE:-ghcr.io/ggml-org/llama.cpp:server}
+    profiles:
+      - mac-m4
+    container_name: p4symtest-llama-server-mac-m4
+    environment:
+      <<: *llm-profile-mac-m4
+    command:
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8080"
+      - --model
+      - /models/${MAC_M4_LLAMA_MODEL_FILE:-qwen2.5-coder-3b-instruct-q4_k_m.gguf}
+      - --ctx-size
+      - "${MAC_M4_LLAMA_CONTEXT_SIZE:-8192}"
+      - --threads
+      - "${MAC_M4_LLAMA_THREADS:-8}"
+      - --n-gpu-layers
+      - "${MAC_M4_LLAMA_GPU_LAYERS:-0}"
+
+  llm-analyzer-local-gpu:
+    <<: *llm-analyzer-common
+    profiles:
+      - local-gpu
+    container_name: p4symtest-llm-analyzer-local-gpu
+    depends_on:
+      llama-server-local-gpu:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+    environment:
+      <<:
+        - *llm-analyzer-env
+        - *llm-profile-local-gpu
+
+  llama-server-local-gpu:
+    <<: *llama-server-common
+    image: ${LLAMA_SERVER_CUDA_IMAGE:-ghcr.io/ggml-org/llama.cpp:server-cuda}
+    profiles:
+      - local-gpu
+    container_name: p4symtest-llama-server-local-gpu
+    environment:
+      <<: *llm-profile-local-gpu
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities:
+                - gpu
+    command:
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8080"
+      - --model
+      - /models/${LOCAL_GPU_LLAMA_MODEL_FILE:-qwen2.5-coder-7b-instruct-q4_k_m.gguf}
+      - --ctx-size
+      - "${LOCAL_GPU_LLAMA_CONTEXT_SIZE:-8192}"
+      - --threads
+      - "${LOCAL_GPU_LLAMA_THREADS:-8}"
+      - --n-gpu-layers
+      - "${LOCAL_GPU_LLAMA_GPU_LAYERS:-32}"
+
+  llm-analyzer-vps-light:
+    <<: *llm-analyzer-common
+    profiles:
+      - vps-light
+    container_name: p4symtest-llm-analyzer-vps-light
+    depends_on:
+      llama-server-vps-light:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+    environment:
+      <<:
+        - *llm-analyzer-env
+        - *llm-profile-vps-light
+
+  llama-server-vps-light:
+    <<: *llama-server-common
+    image: ${LLAMA_SERVER_IMAGE:-ghcr.io/ggml-org/llama.cpp:server}
+    profiles:
+      - vps-light
+    container_name: p4symtest-llama-server-vps-light
+    environment:
+      <<: *llm-profile-vps-light
+    command:
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8080"
+      - --model
+      - /models/${VPS_LIGHT_LLAMA_MODEL_FILE:-qwen2.5-coder-1.5b-instruct-q4_k_m.gguf}
+      - --ctx-size
+      - "${VPS_LIGHT_LLAMA_CONTEXT_SIZE:-2048}"
+      - --threads
+      - "${VPS_LIGHT_LLAMA_THREADS:-2}"
+      - --n-gpu-layers
+      - "${VPS_LIGHT_LLAMA_GPU_LAYERS:-0}"
+
+  qdrant:
+    image: ${QDRANT_IMAGE:-qdrant/qdrant:latest}
+    profiles:
+      - cpu-local
+      - mac-m4
+      - local-gpu
+      - vps-light
+    container_name: p4symtest-qdrant
+    expose:
+      - "6333"
+      - "6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    networks:
+      - p4symtest-network
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "curl -fsS http://localhost:6333/healthz >/dev/null || wget -qO- http://localhost:6333/healthz >/dev/null",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+
 networks:
   p4symtest-network:
     driver: bridge
 
 volumes:
   node_modules:
+  qdrant_data:
