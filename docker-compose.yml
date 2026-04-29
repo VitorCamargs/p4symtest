@@ -67,6 +67,8 @@ x-llm-analyzer-common: &llm-analyzer-common
 x-llama-server-common: &llama-server-common
   expose:
     - "8080"
+  ports:
+    - "127.0.0.1:${LLAMA_SERVER_HOST_PORT:-8080}:8080"
   volumes:
     - type: bind
       source: ${LLM_MODELS_PATH:-/tmp/p4symtest-models}
