@@ -1,9 +1,15 @@
 import json
 
-from backend.table_diagnostics.analyzer_client import (
-    request_table_diagnostics,
-    table_diagnostics_enabled,
-)
+try:
+    from backend.table_diagnostics.analyzer_client import (
+        request_table_diagnostics,
+        table_diagnostics_enabled,
+    )
+except ModuleNotFoundError:
+    from table_diagnostics.analyzer_client import (
+        request_table_diagnostics,
+        table_diagnostics_enabled,
+    )
 
 
 class FakeResponse:
@@ -30,7 +36,7 @@ def minimal_facts():
 def enabled_env():
     return {
         "P4SYMTEST_TABLE_DIAGNOSTICS_ENABLED": "1",
-        "P4SYMTEST_LLM_ANALYZER_URL": "http://llm-analyzer:8080",
+        "P4SYMTEST_LLM_ANALYZER_URL": "http://llm-analyzer:8000",
         "P4SYMTEST_LLM_ANALYZER_TIMEOUT_SECONDS": "0.1",
     }
 

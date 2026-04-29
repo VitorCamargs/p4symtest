@@ -1,14 +1,24 @@
 import json
 from pathlib import Path
 
-from backend.table_diagnostics.extractor import (
-    build_table_analysis_facts,
-    count_drop_states,
-    extract_field_updates,
-    extract_p4_slice,
-    extract_runtime_entries,
-    extract_topology_slice,
-)
+try:
+    from backend.table_diagnostics.extractor import (
+        build_table_analysis_facts,
+        count_drop_states,
+        extract_field_updates,
+        extract_p4_slice,
+        extract_runtime_entries,
+        extract_topology_slice,
+    )
+except ModuleNotFoundError:
+    from table_diagnostics.extractor import (
+        build_table_analysis_facts,
+        count_drop_states,
+        extract_field_updates,
+        extract_p4_slice,
+        extract_runtime_entries,
+        extract_topology_slice,
+    )
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
