@@ -1,0 +1,35 @@
+{
+  "manifest_version": "rag-manifest.v1",
+  "manifest_id": "p4symtest-rag-fixture",
+  "collection": "rag-test",
+  "vector_size": 4,
+  "distance": "Cosine",
+  "chunks": [
+    {
+      "chunk_key": "v1model-egress-spec-drop",
+      "source_id": "v1model-egress-spec",
+      "title": "v1model egress_spec and drop behavior",
+      "source_type": "v1model",
+      "citation": "P4 v1model reference, standard_metadata.egress_spec",
+      "version": "fixture-v1",
+      "text": "standard_metadata.egress_spec selects the output port. mark_to_drop sets drop behavior and should be treated as evidence for dropped packets.",
+      "embedding": [1.0, 0.0, 0.0, 0.0],
+      "metadata": {
+        "tags": ["egress_spec", "drop"]
+      }
+    },
+    {
+      "chunk_key": "p4-lpm-forwarding",
+      "source_id": "p4-lpm-forwarding",
+      "title": "P4 LPM forwarding tables",
+      "source_type": "p4_practice",
+      "citation": "P4 coding practice note, longest prefix match forwarding",
+      "version": "fixture-v1",
+      "text": "An IPv4 LPM table commonly matches hdr.ipv4.dstAddr and invokes a forwarding action that writes standard_metadata.egress_spec.",
+      "embedding": [0.0, 1.0, 0.0, 0.0],
+      "metadata": {
+        "tags": ["lpm", "forwarding"]
+      }
+    }
+  ]
+}

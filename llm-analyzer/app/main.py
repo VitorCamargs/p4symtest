@@ -1,9 +1,12 @@
 import logging
 
-from fastapi import FastAPI
+import httpx
+from fastapi import FastAPI, HTTPException
 
 from .diagnostics import PROMPT_VERSION, build_mock_diagnostics
 from .models import TableAnalysisFacts, TableWarningAnalysisRequest, TableWarningDiagnostics
+from .rag import RagSearchService, build_default_rag_service
+from .rag_models import RagSearchRequest, RagSearchResponse
 
 
 logging.basicConfig(level=logging.INFO)
@@ -39,9 +42,34 @@ def analyze_table_warning(
     return build_mock_diagnostics(request)
 
 
+@app.post("/rag/search", response_model=RagSearchResponse)
+def rag_search(request: RagSearchRequest) -> RagSearchResponse:
+    service = _rag_service()
+    try:
+        response = service.search(request)
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=503, detail="rag store unavailable") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    logger.info(
+        "rag_search_request recovered_chunk_ids=%s",
+        ",".join(response.chunk_ids),
+    )
+    return response
+
+
 def _normalize_request(
     request: TableWarningAnalysisRequest | TableAnalysisFacts,
 ) -> TableWarningAnalysisRequest:
     if isinstance(request, TableWarningAnalysisRequest):
         return request
     return TableWarningAnalysisRequest(facts=request)
+
+
+def _rag_service() -> RagSearchService:
+    service = getattr(app.state, "rag_search_service", None)
+    if service is None:
+        service = build_default_rag_service()
+        app.state.rag_search_service = service
+    return service
