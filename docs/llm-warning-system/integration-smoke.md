@@ -60,3 +60,23 @@ Run the frontend contract tests inside the frontend container:
 ```bash
 docker compose run --rm --no-deps frontend sh -lc "npm ci && npm run test"
 ```
+
+## RAG-backed analyzer pipeline
+
+The first RAG/LLM integration is tested inside `llm-analyzer` without a live
+model server. The test uses:
+
+- an in-memory RAG store loaded from the sample manifest;
+- the real prompt builder;
+- the real JSON response validator;
+- an `httpx.MockTransport` llama-server response.
+
+This proves that retrieved context reaches the prompt, the mock model response
+is validated, and stable RAG point IDs are preserved in `rag_context_ids`.
+
+Run inside the analyzer container:
+
+```bash
+docker compose --profile cpu-local run --rm --no-deps llm-analyzer \
+  python -m pytest tests/test_warning_pipeline_integration.py -q
+```
