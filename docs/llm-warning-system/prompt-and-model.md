@@ -16,6 +16,10 @@ The analyzer reads these variables:
 - `LLM_TEMPERATURE`: default low temperature for reproducible diagnostics.
 - `LLM_TIMEOUT_SECONDS` or `LLM_REQUEST_TIMEOUT_SECONDS`: request timeout.
 - `LLM_MAX_OUTPUT_TOKENS`: maximum JSON response size.
+- `LLM_JSON_RESPONSE_FORMAT`: whether to request OpenAI-compatible JSON object
+  responses from the local model server.
+- `LLM_REPAIR_ATTEMPTS`: number of automatic JSON/schema repair attempts after
+  a malformed model response.
 
 Only configuration changes between runtime profiles. The prompt builder,
 validator, and HTTP client code path stays the same.
@@ -34,13 +38,15 @@ can be enabled later without changing backend/frontend payloads.
 
 ## Prompt contract
 
-Prompt version: `table-warning-json-v1`.
+Prompt version: `table-warning-json-v2`.
 
-The prompt has two messages:
+The prompt has four messages:
 
 - System message: defines the model as an assistive interpreter of P4SymTest
-  facts, not a verifier.
-- User message: JSON payload containing compact deterministic facts, optional
+  facts, not a verifier, and explicitly forbids chain-of-thought output.
+- Compact user/assistant few-shot example: shows one valid diagnostics JSON
+  response with deterministic evidence.
+- Final user message: JSON payload containing compact deterministic facts, optional
   RAG chunks, available evidence summaries, and the required output contract.
 
 The prompt intentionally excludes raw giant snapshots. It includes only snapshot
@@ -61,6 +67,10 @@ The analyzer owns these response fields and sets them after parsing:
 - `model_info.prompt_version`
 - `rag_context_ids`
 
+The response parser accepts a single JSON object directly. It also extracts the
+first complete JSON object from accidental markdown/code-fence wrappers, because
+small local models may ignore JSON-only instructions on the first pass.
+
 ## Fallback policy
 
 The validator returns an inconclusive diagnostic instead of surfacing unsafe
@@ -77,3 +87,9 @@ model output when:
 
 Fallback diagnostics preserve deterministic state-count evidence and include no
 warnings.
+
+Before returning fallback for malformed model content, the analyzer performs one
+repair attempt by default. The repair request sends the original task payload,
+the invalid model answer, and the validation error, then asks for only a valid
+`TableWarningDiagnostics` JSON object. If the repaired answer still fails,
+fallback is returned.

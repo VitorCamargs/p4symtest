@@ -80,8 +80,14 @@ def test_prompt_contains_facts_and_chunks() -> None:
     prompt = build_table_warning_prompt(facts, [chunk])
     prompt_text = "\n".join(message["content"] for message in prompt.messages)
 
-    assert prompt.prompt_version == "table-warning-json-v1"
+    assert prompt.prompt_version == "table-warning-json-v2"
     assert prompt.rag_context_ids == ["p4-spec-table-001"]
+    assert [message["role"] for message in prompt.messages] == [
+        "system",
+        "user",
+        "assistant",
+        "user",
+    ]
     assert "MyIngress.ipv4_lpm" in prompt_text
     assert "All output states are marked as dropped." in prompt_text
     assert "A table applies one selected action" in prompt_text

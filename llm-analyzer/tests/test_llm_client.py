@@ -19,6 +19,8 @@ def test_config_reads_env_aliases() -> None:
             "LLM_TEMPERATURE": "0.05",
             "LLM_REQUEST_TIMEOUT_SECONDS": "12",
             "LLM_MAX_OUTPUT_TOKENS": "256",
+            "LLM_JSON_RESPONSE_FORMAT": "false",
+            "LLM_REPAIR_ATTEMPTS": "2",
         }
     )
 
@@ -28,6 +30,8 @@ def test_config_reads_env_aliases() -> None:
     assert config.temperature == 0.05
     assert config.timeout_seconds == 12
     assert config.max_output_tokens == 256
+    assert config.json_response_format is False
+    assert config.repair_attempts == 2
 
 
 def test_config_prefers_base_url_and_timeout_aliases() -> None:
@@ -61,6 +65,7 @@ def test_mock_llm_returns_valid_json() -> None:
         assert body["model"] == "qwen-test"
         assert body["temperature"] == 0.2
         assert body["max_tokens"] == 128
+        assert body["response_format"] == {"type": "json_object"}
         assert body["messages"][0]["role"] == "system"
 
         return httpx.Response(
@@ -89,8 +94,37 @@ def test_mock_llm_returns_valid_json() -> None:
     assert diagnostics.warnings[0].type == "unexpected_drop"
     assert diagnostics.model_info.provider == "llama-server"
     assert diagnostics.model_info.model == "qwen-test"
-    assert diagnostics.model_info.prompt_version == "table-warning-json-v1"
+    assert diagnostics.model_info.prompt_version == "table-warning-json-v2"
     assert diagnostics.rag_context_ids == ["routing-doc-001"]
+
+
+def test_fenced_json_is_parsed_without_repair() -> None:
+    facts = sample_facts()
+    calls = []
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        calls.append("initial")
+        return httpx.Response(
+            200,
+            json={
+                "model": "qwen-test",
+                "choices": [
+                    {
+                        "message": {
+                            "content": "```json\n"
+                            + json.dumps(_valid_model_payload(facts.table_name))
+                            + "\n```"
+                        }
+                    }
+                ],
+            },
+        )
+
+    diagnostics = analyze_table_warning_with_llm(facts, client=_mock_client(handler))
+
+    assert calls == ["initial"]
+    assert diagnostics.inconclusive is False
+    assert diagnostics.warnings[0].type == "unexpected_drop"
 
 
 def test_mock_llm_returns_invalid_json() -> None:
@@ -111,6 +145,31 @@ def test_mock_llm_returns_invalid_json() -> None:
     assert diagnostics.warnings == []
     assert diagnostics.diagnostics_version == "llm.fallback.v1"
     assert "valid JSON" in diagnostics.observed_behavior
+
+
+def test_invalid_first_response_is_repaired() -> None:
+    facts = sample_facts()
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        calls.append(body["messages"][0]["content"])
+        if len(calls) == 1:
+            return httpx.Response(
+                200,
+                json={
+                    "model": "qwen-test",
+                    "choices": [{"message": {"content": "not json"}}],
+                },
+            )
+        assert "repair" in body["messages"][0]["content"].lower()
+        return _completion_response(_valid_model_payload(facts.table_name))
+
+    diagnostics = analyze_table_warning_with_llm(facts, client=_mock_client(handler))
+
+    assert len(calls) == 2
+    assert diagnostics.inconclusive is False
+    assert diagnostics.warnings[0].type == "unexpected_drop"
 
 
 def test_mock_llm_times_out() -> None:

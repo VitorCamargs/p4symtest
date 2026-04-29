@@ -76,7 +76,7 @@ def valid_diagnostics(
     *,
     provider: str = "llama-server",
     model: str = "qwen2.5-coder-test",
-    prompt_version: str = "table-warning-json-v1",
+    prompt_version: str = "table-warning-json-v2",
     rag_context_ids: list[str] | None = None,
 ) -> TableWarningDiagnostics:
     return TableWarningDiagnostics(

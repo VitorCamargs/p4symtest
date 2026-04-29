@@ -9,7 +9,7 @@ from pydantic import Field
 from .models import StrictBaseModel, TableAnalysisFacts
 
 
-PROMPT_VERSION = "table-warning-json-v1"
+PROMPT_VERSION = "table-warning-json-v2"
 MAX_CHUNK_TEXT_CHARS = 1200
 MAX_P4_SOURCE_CHARS = 2400
 MAX_LOG_EXCERPT_CHARS = 800
@@ -50,6 +50,8 @@ def build_table_warning_prompt(
     return PromptBundle(
         messages=[
             {"role": "system", "content": _system_message()},
+            {"role": "user", "content": _few_shot_user_message()},
+            {"role": "assistant", "content": _few_shot_assistant_message()},
             {
                 "role": "user",
                 "content": json.dumps(prompt_payload, ensure_ascii=True, indent=2, sort_keys=True),
@@ -67,14 +69,123 @@ def build_table_warning_messages(
     return build_table_warning_prompt(facts, rag_chunks).messages
 
 
+def build_table_warning_repair_messages(
+    prompt: PromptBundle,
+    invalid_content: str,
+    validation_error: str,
+) -> list[dict[str, str]]:
+    repair_payload = {
+        "task": "Repair the previous answer into one valid TableWarningDiagnostics JSON object.",
+        "validation_error": validation_error,
+        "rules": [
+            "Return only one JSON object.",
+            "Do not include markdown or code fences.",
+            "Preserve the analyzed table_name from the original task.",
+            "Every warning must cite evidence_ids present in evidence.",
+            "If the facts do not support a warning, return inconclusive=true and warnings=[].",
+            "Do not include chain-of-thought.",
+        ],
+        "original_task_payload": prompt.messages[-1]["content"],
+        "previous_answer": _truncate(invalid_content, 5000),
+    }
+    return [
+        {
+            "role": "system",
+            "content": (
+                "You repair malformed diagnostics responses for P4SymTest. "
+                "Return only valid JSON matching the requested schema."
+            ),
+        },
+        {
+            "role": "user",
+            "content": json.dumps(repair_payload, ensure_ascii=True, indent=2, sort_keys=True),
+        },
+    ]
+
+
 def _system_message() -> str:
     return (
         "You assist P4SymTest by interpreting deterministic symbolic-execution facts. "
         "You are not a verifier and must not invent unsupported behavior. "
         "Use only the supplied facts, summaries, P4 slices, runtime/topology summaries, logs, "
         "and RAG chunks. If evidence is insufficient, mark the diagnostic inconclusive. "
-        "Return exactly one JSON object and no markdown, comments, prose, or code fences."
+        "Return exactly one JSON object and no markdown, comments, prose, or code fences. "
+        "Do not copy facts, table names, warnings, or conclusions from the example; "
+        "the example only demonstrates output shape. "
+        "Do not reveal chain-of-thought; put concise conclusions only in the JSON fields."
     )
+
+
+def _few_shot_user_message() -> str:
+    payload = {
+        "prompt_version": PROMPT_VERSION,
+        "task": "Analyze one P4 table execution and return evidence-based diagnostics.",
+        "facts": {
+            "pipeline": "ingress",
+            "table_name": "ExampleIngress.forward_table",
+            "switch_id": "s1",
+            "state_summary": {
+                "input_states": 2,
+                "output_states": 2,
+                "drop_states": 0,
+                "field_updates": [
+                    {
+                        "field": "standard_metadata.egress_spec",
+                        "summary": "All explored states were assigned egress port 1.",
+                    }
+                ],
+            },
+            "runtime_entries": [
+                {
+                    "match": {"hdr.ipv4.dstAddr": "10.0.1.1/32"},
+                    "action": "ipv4_forward",
+                    "action_params": {"port": 1},
+                }
+            ],
+            "available_evidence": [
+                {
+                    "id": "state.summary",
+                    "source": "snapshot_summary",
+                    "summary": "2 input states, 2 output states, 0 drop states.",
+                },
+                {
+                    "id": "field_update.standard.metadata.egress.spec",
+                    "source": "snapshot_summary",
+                    "summary": "standard_metadata.egress_spec: All explored states were assigned egress port 1.",
+                },
+            ],
+        },
+        "rag_context": [],
+        "output_contract": {
+            "json_only": True,
+            "schema_name": "TableWarningDiagnostics",
+        },
+    }
+    return json.dumps(payload, ensure_ascii=True, indent=2, sort_keys=True)
+
+
+def _few_shot_assistant_message() -> str:
+    payload = {
+        "diagnostics_version": "llm.table-warning.v1",
+        "table_name": "ExampleIngress.forward_table",
+        "expected_behavior": "Runtime evidence suggests the IPv4 table should forward matching packets with ipv4_forward.",
+        "observed_behavior": "The supplied state summary shows no drops and assigns egress port 1.",
+        "warnings": [],
+        "inconclusive": False,
+        "evidence": [
+            {
+                "id": "state.summary",
+                "source": "snapshot_summary",
+                "summary": "2 input states, 2 output states, 0 drop states.",
+            },
+            {
+                "id": "field_update.standard.metadata.egress.spec",
+                "source": "snapshot_summary",
+                "summary": "standard_metadata.egress_spec: All explored states were assigned egress port 1.",
+            },
+        ],
+    }
+    return json.dumps(payload, ensure_ascii=True, sort_keys=True)
 
 
 def _facts_summary(facts: TableAnalysisFacts) -> dict[str, Any]:

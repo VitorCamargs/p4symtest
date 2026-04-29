@@ -31,21 +31,11 @@ def parse_table_warning_diagnostics(
     context_ids = list(rag_context_ids or [])
 
     try:
-        payload = json.loads(content)
+        payload = _load_json_object(content)
     except (TypeError, json.JSONDecodeError):
         return build_inconclusive_fallback(
             facts,
             reason="Model response was not valid JSON.",
-            provider=provider,
-            model=model,
-            prompt_version=prompt_version,
-            rag_context_ids=context_ids,
-        )
-
-    if not isinstance(payload, Mapping):
-        return build_inconclusive_fallback(
-            facts,
-            reason="Model response JSON was not an object.",
             provider=provider,
             model=model,
             prompt_version=prompt_version,
@@ -204,3 +194,54 @@ def _fmt_count(value: float) -> str:
     if value == int(value):
         return str(int(value))
     return str(value)
+
+
+def _load_json_object(content: str) -> Mapping[str, Any]:
+    try:
+        payload = json.loads(content)
+        if isinstance(payload, Mapping):
+            return payload
+    except json.JSONDecodeError:
+        pass
+
+    candidate = _extract_first_json_object(content)
+    if candidate is None:
+        raise json.JSONDecodeError("JSON response was not an object", content, 0)
+    extracted = json.loads(candidate)
+    if not isinstance(extracted, Mapping):
+        raise json.JSONDecodeError("Extracted JSON response was not an object", candidate, 0)
+    return extracted
+
+
+def _extract_first_json_object(content: str) -> str | None:
+    if not isinstance(content, str):
+        return None
+
+    start = content.find("{")
+    if start < 0:
+        return None
+
+    depth = 0
+    in_string = False
+    escaped = False
+    for index in range(start, len(content)):
+        char = content[index]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+
+        if char == '"':
+            in_string = True
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return content[start : index + 1]
+
+    return None

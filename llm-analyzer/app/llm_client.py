@@ -8,8 +8,17 @@ from typing import Any
 import httpx
 
 from .models import TableAnalysisFacts, TableWarningDiagnostics
-from .prompt_builder import PROMPT_VERSION, RagChunk, build_table_warning_prompt
-from .response_validator import build_inconclusive_fallback, parse_table_warning_diagnostics
+from .prompt_builder import (
+    PROMPT_VERSION,
+    RagChunk,
+    build_table_warning_prompt,
+    build_table_warning_repair_messages,
+)
+from .response_validator import (
+    FALLBACK_DIAGNOSTICS_VERSION,
+    build_inconclusive_fallback,
+    parse_table_warning_diagnostics,
+)
 
 
 DEFAULT_LLAMA_BASE_URL = "http://llama-server:8080"
@@ -17,6 +26,8 @@ DEFAULT_LLAMA_MODEL = "local-open-source-model"
 DEFAULT_TEMPERATURE = 0.1
 DEFAULT_TIMEOUT_SECONDS = 30.0
 DEFAULT_MAX_OUTPUT_TOKENS = 512
+DEFAULT_JSON_RESPONSE_FORMAT = True
+DEFAULT_REPAIR_ATTEMPTS = 1
 LLAMA_PROVIDER = "llama-server"
 
 
@@ -35,6 +46,8 @@ class LlamaServerConfig:
     temperature: float = DEFAULT_TEMPERATURE
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS
     max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS
+    json_response_format: bool = DEFAULT_JSON_RESPONSE_FORMAT
+    repair_attempts: int = DEFAULT_REPAIR_ATTEMPTS
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> "LlamaServerConfig":
@@ -53,6 +66,17 @@ class LlamaServerConfig:
                 env,
                 "LLM_MAX_OUTPUT_TOKENS",
                 default=DEFAULT_MAX_OUTPUT_TOKENS,
+            ),
+            json_response_format=_env_bool(
+                env,
+                "LLM_JSON_RESPONSE_FORMAT",
+                "LLM_JSON_RESPONSE_FORMAT_ENABLED",
+                default=DEFAULT_JSON_RESPONSE_FORMAT,
+            ),
+            repair_attempts=_env_int(
+                env,
+                "LLM_REPAIR_ATTEMPTS",
+                default=DEFAULT_REPAIR_ATTEMPTS,
             ),
         )
 
@@ -88,6 +112,8 @@ class LlamaServerClient:
             "temperature": self.config.temperature,
             "max_tokens": self.config.max_output_tokens,
         }
+        if self.config.json_response_format:
+            payload["response_format"] = {"type": "json_object"}
 
         response = self._client.post(
             self.config.chat_completions_url,
@@ -135,37 +161,76 @@ def analyze_table_warning_with_llm(
     owns_client = client is None
 
     try:
-        completion = active_client.create_chat_completion(prompt.messages)
-    except httpx.TimeoutException:
-        return build_inconclusive_fallback(
+        try:
+            completion = active_client.create_chat_completion(prompt.messages)
+        except httpx.TimeoutException:
+            return build_inconclusive_fallback(
+                facts,
+                reason="llama-server request timed out.",
+                provider=LLAMA_PROVIDER,
+                model=active_config.model,
+                prompt_version=prompt.prompt_version,
+                rag_context_ids=prompt.rag_context_ids,
+            )
+        except (httpx.HTTPError, LlamaServerError):
+            return build_inconclusive_fallback(
+                facts,
+                reason="llama-server request failed.",
+                provider=LLAMA_PROVIDER,
+                model=active_config.model,
+                prompt_version=prompt.prompt_version,
+                rag_context_ids=prompt.rag_context_ids,
+            )
+
+        diagnostics = parse_table_warning_diagnostics(
+            completion.content,
             facts,
-            reason="llama-server request timed out.",
             provider=LLAMA_PROVIDER,
-            model=active_config.model,
+            model=completion.model,
             prompt_version=prompt.prompt_version,
             rag_context_ids=prompt.rag_context_ids,
         )
-    except (httpx.HTTPError, LlamaServerError):
-        return build_inconclusive_fallback(
+        if not _should_repair(diagnostics, active_config):
+            return diagnostics
+
+        try:
+            repair_completion = active_client.create_chat_completion(
+                build_table_warning_repair_messages(
+                    prompt,
+                    invalid_content=completion.content,
+                    validation_error=diagnostics.observed_behavior,
+                )
+            )
+        except httpx.TimeoutException:
+            return build_inconclusive_fallback(
+                facts,
+                reason="llama-server repair request timed out.",
+                provider=LLAMA_PROVIDER,
+                model=active_config.model,
+                prompt_version=prompt.prompt_version,
+                rag_context_ids=prompt.rag_context_ids,
+            )
+        except (httpx.HTTPError, LlamaServerError):
+            return build_inconclusive_fallback(
+                facts,
+                reason="llama-server repair request failed.",
+                provider=LLAMA_PROVIDER,
+                model=active_config.model,
+                prompt_version=prompt.prompt_version,
+                rag_context_ids=prompt.rag_context_ids,
+            )
+
+        return parse_table_warning_diagnostics(
+            repair_completion.content,
             facts,
-            reason="llama-server request failed.",
             provider=LLAMA_PROVIDER,
-            model=active_config.model,
+            model=repair_completion.model,
             prompt_version=prompt.prompt_version,
             rag_context_ids=prompt.rag_context_ids,
         )
     finally:
         if owns_client:
             active_client.close()
-
-    return parse_table_warning_diagnostics(
-        completion.content,
-        facts,
-        provider=LLAMA_PROVIDER,
-        model=completion.model,
-        prompt_version=prompt.prompt_version,
-        rag_context_ids=prompt.rag_context_ids,
-    )
 
 
 def _extract_message_content(response_payload: Mapping[str, Any]) -> str:
@@ -218,6 +283,19 @@ def _env_float(
     return default
 
 
+def _env_bool(
+    env: Mapping[str, str],
+    *names: str,
+    default: bool,
+) -> bool:
+    for name in names:
+        value = env.get(name)
+        if value is None or not value.strip():
+            continue
+        return value.strip().lower() in {"1", "true", "yes", "on", "y"}
+    return default
+
+
 def _env_int(
     env: Mapping[str, str],
     *names: str,
@@ -232,3 +310,13 @@ def _env_int(
         except ValueError:
             continue
     return default
+
+
+def _should_repair(
+    diagnostics: TableWarningDiagnostics,
+    config: LlamaServerConfig,
+) -> bool:
+    return (
+        config.repair_attempts > 0
+        and diagnostics.diagnostics_version == FALLBACK_DIAGNOSTICS_VERSION
+    )

@@ -24,8 +24,8 @@ def test_rag_prompt_llm_mock_pipeline_returns_context_ids(caplog) -> None:
 
     def handler(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content)
-        user_payload = json.loads(body["messages"][1]["content"])
-        assert user_payload["prompt_version"] == "table-warning-json-v1"
+        user_payload = json.loads(body["messages"][-1]["content"])
+        assert user_payload["prompt_version"] == "table-warning-json-v2"
         assert user_payload["rag_context"][0]["source_id"] == "v1model-egress-spec"
         assert "mark_to_drop" in user_payload["rag_context"][0]["text"]
         return _completion_response(_valid_model_payload(facts.table_name))
@@ -42,7 +42,7 @@ def test_rag_prompt_llm_mock_pipeline_returns_context_ids(caplog) -> None:
     assert diagnostics.inconclusive is False
     assert diagnostics.warnings[0].type == "unexpected_drop"
     assert diagnostics.model_info.provider == "llama-server"
-    assert diagnostics.model_info.prompt_version == "table-warning-json-v1"
+    assert diagnostics.model_info.prompt_version == "table-warning-json-v2"
     assert diagnostics.rag_context_ids == [chunk_ids[0]]
     assert "warning_pipeline_context" in caplog.text
     assert chunk_ids[0] in caplog.text

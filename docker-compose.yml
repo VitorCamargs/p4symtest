@@ -1,7 +1,9 @@
 x-llm-analyzer-env: &llm-analyzer-env
   QDRANT_URL: ${QDRANT_URL:-http://qdrant:6333}
   LLAMA_SERVER_URL: ${LLAMA_SERVER_URL:-http://llama-server:8080}
-  LLM_TEMPERATURE: ${LLM_TEMPERATURE:-0.1}
+  LLM_TEMPERATURE: ${LLM_TEMPERATURE:-0}
+  LLM_JSON_RESPONSE_FORMAT: ${LLM_JSON_RESPONSE_FORMAT:-true}
+  LLM_REPAIR_ATTEMPTS: ${LLM_REPAIR_ATTEMPTS:-1}
   RAG_COLLECTION: ${RAG_COLLECTION:-p4symtest-warnings}
 
 x-llm-profile-cpu-local: &llm-profile-cpu-local

@@ -71,3 +71,14 @@ Rationale: the LLM-only path gives a clear baseline for JSON reliability,
 latency, evidence handling, and hallucination behavior before adding vector
 retrieval. It also keeps the later RAG evaluation cleaner because the system
 can compare model behavior with and without retrieved P4/domain context.
+
+## Decision 012: JSON discipline without chain-of-thought
+
+The analyzer uses JSON-oriented decoding hints, a compact few-shot example,
+tolerant extraction of the first complete JSON object, and one repair attempt
+before falling back to inconclusive diagnostics. It does not request explicit
+chain-of-thought from the model.
+
+Rationale: diagnostics need machine-valid contracts and concise evidence-based
+explanations, not hidden or free-form reasoning. The JSON fields already hold
+the auditable explanation needed by P4SymTest and by later experiments.
