@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://p4symtest.local/schemas/rag_chunk.schema.json",
+  "title": "RagChunk",
+  "type": "object",
+  "required": ["source_id", "title", "source_type", "citation", "version", "text"],
+  "additionalProperties": false,
+  "properties": {
+    "source_id": { "type": "string" },
+    "title": { "type": "string" },
+    "source_type": {
+      "type": "string",
+      "enum": ["p4_spec", "p4_practice", "bmv2", "v1model", "routing", "cisco_manual", "iso", "paper", "project_note"]
+    },
+    "citation": { "type": "string" },
+    "version": { "type": "string" },
+    "text": { "type": "string" },
+    "score": { "type": "number", "minimum": 0 }
+  }
+}
+

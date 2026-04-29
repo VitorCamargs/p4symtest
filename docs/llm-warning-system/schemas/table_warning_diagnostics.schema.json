@@ -1,0 +1,96 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://p4symtest.local/schemas/table_warning_diagnostics.schema.json",
+  "title": "TableWarningDiagnostics",
+  "type": "object",
+  "required": [
+    "diagnostics_version",
+    "table_name",
+    "expected_behavior",
+    "observed_behavior",
+    "warnings",
+    "inconclusive",
+    "evidence",
+    "model_info",
+    "rag_context_ids"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "diagnostics_version": { "type": "string" },
+    "table_name": { "type": "string" },
+    "expected_behavior": { "type": "string" },
+    "observed_behavior": { "type": "string" },
+    "inconclusive": { "type": "boolean" },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["type", "severity", "confidence", "source", "evidence_ids", "explanation", "suggested_action"],
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "unreachable_table",
+              "unexpected_drop",
+              "rule_shadowing",
+              "missing_runtime_entry",
+              "unexpected_field_update",
+              "no_effect_action",
+              "parser_table_mismatch",
+              "deparser_invalid_header",
+              "egress_spec_conflict"
+            ]
+          },
+          "severity": {
+            "type": "string",
+            "enum": ["info", "low", "medium", "high"]
+          },
+          "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+          "source": {
+            "type": "string",
+            "enum": ["deterministic", "llm_hypothesis"]
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "explanation": { "type": "string" },
+          "suggested_action": { "type": "string" }
+        }
+      }
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "source", "summary"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string" },
+          "source": {
+            "type": "string",
+            "enum": ["symbolic_fact", "p4_slice", "runtime", "topology", "snapshot_summary", "log_summary", "rag_chunk"]
+          },
+          "summary": { "type": "string" },
+          "location": { "type": "string" }
+        }
+      }
+    },
+    "model_info": {
+      "type": "object",
+      "required": ["provider", "model", "prompt_version"],
+      "additionalProperties": false,
+      "properties": {
+        "provider": { "type": "string" },
+        "model": { "type": "string" },
+        "prompt_version": { "type": "string" }
+      }
+    },
+    "rag_context_ids": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  }
+}
+

@@ -1,0 +1,66 @@
+{
+  "facts_version": "2026-04-llm-warning-v1",
+  "analysis_id": "analysis-s1-ipv4-lpm-parser-states",
+  "pipeline": "ingress",
+  "table_name": "MyIngress.ipv4_lpm",
+  "switch_id": "s1",
+  "input_snapshot": {
+    "filename": "parser_states.json",
+    "state_count": 2
+  },
+  "output_snapshot": {
+    "filename": "s1_MyIngress_ipv4_lpm_from_parser_states_output.json",
+    "state_count": 2
+  },
+  "state_summary": {
+    "input_states": 2,
+    "output_states": 2,
+    "drop_states": 2,
+    "field_updates": [
+      {
+        "field": "standard_metadata.egress_spec",
+        "summary": "Both output states keep the drop value."
+      }
+    ]
+  },
+  "runtime_entries": [
+    {
+      "match": {
+        "hdr.ipv4.dstAddr": ["10.0.1.0", 24]
+      },
+      "action": "MyIngress.ipv4_forward",
+      "action_params": {
+        "port": "1"
+      }
+    }
+  ],
+  "topology_slice": {
+    "switch": "s1",
+    "ports": {
+      "s1-eth1": 1
+    }
+  },
+  "p4_slice": {
+    "table_source": "table ipv4_lpm { key = { hdr.ipv4.dstAddr: lpm; } actions = { ipv4_forward; drop; } }",
+    "action_sources": [
+      "action ipv4_forward(bit<9> port) { standard_metadata.egress_spec = port; }"
+    ]
+  },
+  "symbolic_facts": [
+    {
+      "id": "fact-drop-001",
+      "kind": "drop",
+      "summary": "All output states satisfy egress_spec == DROP."
+    },
+    {
+      "id": "fact-update-001",
+      "kind": "field_update",
+      "summary": "The table action writes standard_metadata.egress_spec."
+    }
+  ],
+  "log_summary": {
+    "stdout_excerpt": "AVISO: Todos os pacotes deste estado sao descartados nesta etapa.",
+    "stderr_excerpt": ""
+  }
+}
+

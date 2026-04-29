@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://p4symtest.local/schemas/table_result_with_optional_diagnostics.schema.json",
+  "title": "TableResultWithOptionalDiagnostics",
+  "type": "object",
+  "required": ["message", "output_states", "output_file"],
+  "additionalProperties": true,
+  "properties": {
+    "message": { "type": "string" },
+    "results_summary": { "type": "array" },
+    "output_states": { "type": "array" },
+    "output_file": { "type": "string" },
+    "diagnostics": { "type": "object" }
+  }
+}
+

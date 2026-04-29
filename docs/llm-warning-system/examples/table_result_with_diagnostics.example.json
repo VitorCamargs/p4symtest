@@ -1,0 +1,22 @@
+{
+  "message": "Analise da tabela MyIngress.ipv4_lpm concluida.",
+  "results_summary": [],
+  "output_states": [],
+  "output_file": "s1_MyIngress_ipv4_lpm_from_parser_states_output.json",
+  "diagnostics": {
+    "diagnostics_version": "2026-04-llm-warning-v1",
+    "table_name": "MyIngress.ipv4_lpm",
+    "expected_behavior": "The table appears to implement IPv4 forwarding based on destination address.",
+    "observed_behavior": "All analyzed states remain on a drop path after table execution.",
+    "inconclusive": false,
+    "warnings": [],
+    "evidence": [],
+    "model_info": {
+      "provider": "mock",
+      "model": "mock-diagnostics",
+      "prompt_version": "table-warning-v1"
+    },
+    "rag_context_ids": []
+  }
+}
+

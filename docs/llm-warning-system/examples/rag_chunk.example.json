@@ -1,0 +1,10 @@
+{
+  "source_id": "p4-v1model-egress-spec",
+  "title": "v1model egress_spec forwarding note",
+  "source_type": "v1model",
+  "citation": "P4 v1model documentation, standard_metadata.egress_spec",
+  "version": "manual-note-001",
+  "text": "In v1model-style pipelines, standard_metadata.egress_spec is commonly used to select the output port. Values reserved for drop behavior must be interpreted according to the target and helper primitives.",
+  "score": 0.91
+}
+

@@ -1,0 +1,121 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://p4symtest.local/schemas/table_analysis_facts.schema.json",
+  "title": "TableAnalysisFacts",
+  "type": "object",
+  "required": [
+    "facts_version",
+    "analysis_id",
+    "pipeline",
+    "table_name",
+    "switch_id",
+    "input_snapshot",
+    "output_snapshot",
+    "state_summary",
+    "runtime_entries",
+    "topology_slice",
+    "p4_slice",
+    "symbolic_facts",
+    "log_summary"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "facts_version": { "type": "string" },
+    "analysis_id": { "type": "string" },
+    "pipeline": { "type": "string", "enum": ["ingress", "egress"] },
+    "table_name": { "type": "string" },
+    "switch_id": { "type": "string" },
+    "input_snapshot": {
+      "type": "object",
+      "required": ["filename", "state_count"],
+      "additionalProperties": false,
+      "properties": {
+        "filename": { "type": "string" },
+        "state_count": { "type": "number", "minimum": 0 }
+      }
+    },
+    "output_snapshot": {
+      "type": "object",
+      "required": ["filename", "state_count"],
+      "additionalProperties": false,
+      "properties": {
+        "filename": { "type": "string" },
+        "state_count": { "type": "number", "minimum": 0 }
+      }
+    },
+    "state_summary": {
+      "type": "object",
+      "required": ["input_states", "output_states", "drop_states", "field_updates"],
+      "additionalProperties": false,
+      "properties": {
+        "input_states": { "type": "number", "minimum": 0 },
+        "output_states": { "type": "number", "minimum": 0 },
+        "drop_states": { "type": "number", "minimum": 0 },
+        "field_updates": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["field", "summary"],
+            "additionalProperties": false,
+            "properties": {
+              "field": { "type": "string" },
+              "summary": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "runtime_entries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["match", "action", "action_params"],
+        "additionalProperties": false,
+        "properties": {
+          "match": { "type": "object" },
+          "action": { "type": "string" },
+          "action_params": { "type": "object" }
+        }
+      }
+    },
+    "topology_slice": { "type": "object" },
+    "p4_slice": {
+      "type": "object",
+      "required": ["table_source", "action_sources"],
+      "additionalProperties": false,
+      "properties": {
+        "table_source": { "type": "string" },
+        "action_sources": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "symbolic_facts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "kind", "summary"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string" },
+          "kind": {
+            "type": "string",
+            "enum": ["reachability", "drop", "field_update", "parser_constraint", "runtime_match", "topology"]
+          },
+          "summary": { "type": "string" }
+        }
+      }
+    },
+    "log_summary": {
+      "type": "object",
+      "required": ["stdout_excerpt", "stderr_excerpt"],
+      "additionalProperties": false,
+      "properties": {
+        "stdout_excerpt": { "type": "string" },
+        "stderr_excerpt": { "type": "string" }
+      }
+    }
+  }
+}
+
