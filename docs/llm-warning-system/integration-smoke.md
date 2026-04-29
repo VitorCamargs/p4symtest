@@ -32,3 +32,31 @@ Diagnostics remain optional: if this endpoint is unavailable, the backend must
 keep returning the symbolic verification result with an inconclusive diagnostics
 fallback when diagnostics are enabled, or no diagnostics field when diagnostics
 are disabled.
+
+## Frontend to backend diagnostics contract
+
+The frontend API client expects table endpoints to return diagnostics as an
+optional top-level field:
+
+```json
+{
+  "message": "table done",
+  "output_states": [],
+  "output_file": "table_output.json",
+  "diagnostics": {
+    "diagnostics_version": "onda0.mock.v1",
+    "table_name": "MyIngress.ipv4_lpm"
+  }
+}
+```
+
+The API client preserves `result.diagnostics` and attaches the same value to
+`result.output_states.diagnostics` as a non-enumerable property. This keeps the
+current `RightPanel` flow compatible with backend diagnostics without changing
+the main execution state shape.
+
+Run the frontend contract tests inside the frontend container:
+
+```bash
+docker compose run --rm --no-deps frontend sh -lc "npm ci && npm run test"
+```
