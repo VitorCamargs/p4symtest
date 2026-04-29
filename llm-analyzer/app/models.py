@@ -38,7 +38,7 @@ EvidenceSource = Literal[
     "log_summary",
     "rag_chunk",
 ]
-DiagnosticsMode = Literal["mock", "mock_inconclusive"]
+DiagnosticsMode = Literal["mock", "mock_inconclusive", "llm", "rag_llm"]
 
 
 class SnapshotSummary(StrictBaseModel):
@@ -136,4 +136,3 @@ class TableWarningDiagnostics(StrictBaseModel):
     evidence: list[EvidenceItem]
     model_info: ModelInfo
     rag_context_ids: list[str]
-

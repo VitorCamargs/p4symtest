@@ -1,6 +1,7 @@
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
+import app.main as main_module
 from app.main import app
 from app.models import TableWarningDiagnostics
 
@@ -71,6 +72,36 @@ def valid_payload() -> dict:
     }
 
 
+def valid_diagnostics(
+    *,
+    provider: str = "llama-server",
+    model: str = "qwen2.5-coder-test",
+    prompt_version: str = "table-warning-json-v1",
+    rag_context_ids: list[str] | None = None,
+) -> TableWarningDiagnostics:
+    return TableWarningDiagnostics(
+        diagnostics_version="llm.table-warning.v1",
+        table_name="MyIngress.ipv4_lpm",
+        expected_behavior="Expected IPv4 forwarding or an explicit drop.",
+        observed_behavior="The analyzed states were interpreted by the selected model pipeline.",
+        warnings=[],
+        inconclusive=False,
+        evidence=[
+            {
+                "id": "state.summary",
+                "source": "snapshot_summary",
+                "summary": "The request contains deterministic state counts.",
+            }
+        ],
+        model_info={
+            "provider": provider,
+            "model": model,
+            "prompt_version": prompt_version,
+        },
+        rag_context_ids=rag_context_ids or [],
+    )
+
+
 def test_health_returns_ok() -> None:
     response = client.get("/health")
 
@@ -98,6 +129,76 @@ def test_direct_facts_payload_returns_mock_diagnostics() -> None:
     body = response.json()
     assert body["table_name"] == "MyIngress.ipv4_lpm"
     assert body["warnings"][0]["type"] == "unexpected_drop"
+
+
+def test_llm_mode_uses_llama_pipeline(monkeypatch) -> None:
+    calls = {}
+
+    def fake_llm(facts, **kwargs):
+        calls["table_name"] = facts.table_name
+        calls["config_model"] = kwargs["config"].model
+        return valid_diagnostics(rag_context_ids=[])
+
+    monkeypatch.setattr(main_module, "analyze_table_warning_with_llm", fake_llm)
+    payload = valid_payload()
+    payload["diagnostics_mode"] = "llm"
+
+    response = client.post("/analyze/table-warning", json=payload)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert calls["table_name"] == "MyIngress.ipv4_lpm"
+    assert calls["config_model"]
+    assert body["model_info"]["provider"] == "llama-server"
+    assert body["rag_context_ids"] == []
+
+
+def test_rag_llm_mode_uses_rag_pipeline(monkeypatch) -> None:
+    calls = {}
+    fake_service = object()
+
+    def fake_rag_service():
+        return fake_service
+
+    def fake_rag(facts, **kwargs):
+        calls["table_name"] = facts.table_name
+        calls["rag_service"] = kwargs["rag_service"]
+        calls["config_model"] = kwargs["llm_config"].model
+        return valid_diagnostics(rag_context_ids=["p4-doc-001"])
+
+    monkeypatch.setattr(main_module, "_rag_service", fake_rag_service)
+    monkeypatch.setattr(main_module, "analyze_table_warning_with_rag", fake_rag)
+    payload = valid_payload()
+    payload["diagnostics_mode"] = "rag_llm"
+
+    response = client.post("/analyze/table-warning", json=payload)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert calls["table_name"] == "MyIngress.ipv4_lpm"
+    assert calls["rag_service"] is fake_service
+    assert calls["config_model"]
+    assert body["model_info"]["provider"] == "llama-server"
+    assert body["rag_context_ids"] == ["p4-doc-001"]
+
+
+def test_model_mode_failure_returns_inconclusive_fallback(monkeypatch) -> None:
+    def failing_llm(_facts, **_kwargs):
+        raise RuntimeError("simulated model failure")
+
+    monkeypatch.setattr(main_module, "analyze_table_warning_with_llm", failing_llm)
+    payload = valid_payload()
+    payload["diagnostics_mode"] = "llm"
+
+    response = client.post("/analyze/table-warning", json=payload)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["diagnostics_version"] == "llm.fallback.v1"
+    assert body["inconclusive"] is True
+    assert body["warnings"] == []
+    assert body["model_info"]["provider"] == "llm-analyzer"
+    assert "llm diagnostics failed: RuntimeError" in body["observed_behavior"]
 
 
 def test_invalid_request_fails_validation() -> None:

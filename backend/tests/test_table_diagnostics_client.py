@@ -112,3 +112,36 @@ def test_analyzer_valid_payload_is_returned():
     )
 
     assert diagnostics == payload
+
+
+def test_configured_diagnostics_mode_wraps_facts_payload():
+    payload = {
+        "diagnostics_version": "2026-04-llm-warning-v1",
+        "table_name": "MyIngress.ipv4_lpm",
+        "expected_behavior": "expected",
+        "observed_behavior": "observed",
+        "warnings": [],
+        "inconclusive": False,
+        "evidence": [],
+        "model_info": {
+            "provider": "llama-server",
+            "model": "qwen2.5-coder-test",
+            "prompt_version": "table-warning-v1",
+        },
+        "rag_context_ids": [],
+    }
+    captured = {}
+    env = enabled_env()
+    env["P4SYMTEST_TABLE_DIAGNOSTICS_MODE"] = "llm"
+
+    def ok_urlopen(request, timeout):
+        captured["body"] = json.loads(request.data.decode("utf-8"))
+        return FakeResponse(json.dumps(payload).encode("utf-8"))
+
+    diagnostics = request_table_diagnostics(
+        minimal_facts(), env=env, urlopen=ok_urlopen
+    )
+
+    assert diagnostics == payload
+    assert captured["body"]["diagnostics_mode"] == "llm"
+    assert captured["body"]["facts"]["table_name"] == "MyIngress.ipv4_lpm"

@@ -105,6 +105,7 @@ services:
     # As ENVs agora vêm do Dockerfile, mas podem ser deixadas aqui também
     environment:
       - LLM_ANALYZER_URL=${LLM_ANALYZER_URL:-http://llm-analyzer:8000}
+      - P4SYMTEST_TABLE_DIAGNOSTICS_MODE=${P4SYMTEST_TABLE_DIAGNOSTICS_MODE:-mock}
     networks:
       - p4symtest-network
     healthcheck:

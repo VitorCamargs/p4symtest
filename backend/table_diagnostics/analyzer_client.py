@@ -62,6 +62,18 @@ def _analyzer_timeout(env):
     return max(parsed, 0.1)
 
 
+def _diagnostics_mode(env):
+    value = (
+        env.get("P4SYMTEST_TABLE_DIAGNOSTICS_MODE")
+        or env.get("TABLE_DIAGNOSTICS_MODE")
+        or env.get("LLM_ANALYZER_DIAGNOSTICS_MODE")
+    )
+    if value is None:
+        return None
+    stripped = str(value).strip()
+    return stripped or None
+
+
 def diagnostics_unavailable(table_name, reason, detail=""):
     observed = "diagnostics_unavailable"
     if reason:
@@ -112,7 +124,13 @@ def request_table_diagnostics(facts, env=None, urlopen=None):
     table_name = facts.get("table_name", "") if isinstance(facts, dict) else ""
     url = _analyzer_url(env)
     timeout = _analyzer_timeout(env)
-    body = json.dumps(facts).encode("utf-8")
+    diagnostics_mode = _diagnostics_mode(env)
+    payload = (
+        {"facts": facts, "diagnostics_mode": diagnostics_mode}
+        if diagnostics_mode
+        else facts
+    )
+    body = json.dumps(payload).encode("utf-8")
     request = urllib.request.Request(
         url,
         data=body,

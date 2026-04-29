@@ -60,3 +60,14 @@ Each delivery must have unique tests and a single reviewable commit.
 
 Rationale: this keeps review, rollback, and article traceability clean.
 
+## Decision 011: LLM-only before RAG
+
+The first real model integration mode is `llm`, which sends deterministic
+table facts directly to the local model server without retrieved context.
+The `rag_llm` mode remains part of the endpoint contract and will be enabled
+when the Qdrant knowledge base is populated.
+
+Rationale: the LLM-only path gives a clear baseline for JSON reliability,
+latency, evidence handling, and hallucination behavior before adding vector
+retrieval. It also keeps the later RAG evaluation cleaner because the system
+can compare model behavior with and without retrieved P4/domain context.

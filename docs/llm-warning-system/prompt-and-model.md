@@ -20,6 +20,18 @@ The analyzer reads these variables:
 Only configuration changes between runtime profiles. The prompt builder,
 validator, and HTTP client code path stays the same.
 
+## Diagnostics modes
+
+`/analyze/table-warning` supports these execution modes:
+
+- `mock`: deterministic mock diagnostics for development and UI integration.
+- `mock_inconclusive`: deterministic abstention path for UI/error handling.
+- `llm`: baseline real-model path with no RAG context.
+- `rag_llm`: real-model path with retrieved context from Qdrant.
+
+The current runtime focus is `llm`. `rag_llm` stays in the contract so Qdrant
+can be enabled later without changing backend/frontend payloads.
+
 ## Prompt contract
 
 Prompt version: `table-warning-json-v1`.
