@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, type ReactNode } from 'react';
 import { Activity, ChevronDown, ChevronRight, ArrowRight, CheckCircle2, XCircle, Eye, EyeOff, Info } from 'lucide-react';
 import { createPortal } from 'react-dom';
 import { parseConstraint, prettyField, prettyFieldValue, prettyComplexConstraint } from '../lib/smt2pretty';
+import { TableDiagnosticsPanel, readTableDiagnostics } from './TableDiagnosticsPanel';
 
 // ── PathItem ──────────────────────────────────────────────────────────────────
 
@@ -1487,6 +1488,7 @@ export default function RightPanel({
   compiledData?: any;
 }) {
   const activeLogs: any[] = Array.isArray(verificationResult) ? verificationResult : [];
+  const diagnostics = readTableDiagnostics(verificationResult);
   const parentStates: any[] = Array.isArray(parentVerificationResult) ? parentVerificationResult : [];
   const numPaths = activeLogs.length;
 
@@ -1554,6 +1556,8 @@ export default function RightPanel({
             </div>
           </div>
         </div>
+
+        <TableDiagnosticsPanel diagnostics={diagnostics} />
 
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
           <h4 style={{ fontSize: '0.9rem', marginBottom: '0.8rem', color: 'var(--text-main)' }}>Path Logs</h4>

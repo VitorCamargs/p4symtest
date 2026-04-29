@@ -63,6 +63,73 @@ export interface TableSchema {
   default_action: string;
 }
 
+export type TableWarningType =
+  | 'unreachable_table'
+  | 'unexpected_drop'
+  | 'rule_shadowing'
+  | 'missing_runtime_entry'
+  | 'unexpected_field_update'
+  | 'no_effect_action'
+  | 'parser_table_mismatch'
+  | 'deparser_invalid_header'
+  | 'egress_spec_conflict';
+
+export type TableWarningSeverity = 'info' | 'low' | 'medium' | 'high';
+export type TableWarningSource = 'deterministic' | 'llm_hypothesis';
+export type TableWarningEvidenceSource =
+  | 'symbolic_fact'
+  | 'p4_slice'
+  | 'runtime'
+  | 'topology'
+  | 'snapshot_summary'
+  | 'log_summary'
+  | 'rag_chunk';
+
+export interface TableWarningEvidence {
+  id: string;
+  source: TableWarningEvidenceSource;
+  summary: string;
+  location?: string;
+}
+
+export interface TableWarning {
+  type: TableWarningType;
+  severity: TableWarningSeverity;
+  confidence: number;
+  source: TableWarningSource;
+  evidence_ids: string[];
+  explanation: string;
+  suggested_action: string;
+}
+
+export interface TableWarningModelInfo {
+  provider: string;
+  model: string;
+  prompt_version: string;
+}
+
+export interface TableWarningDiagnostics {
+  diagnostics_version: string;
+  table_name: string;
+  expected_behavior: string;
+  observed_behavior: string;
+  inconclusive: boolean;
+  warnings: TableWarning[];
+  evidence: TableWarningEvidence[];
+  model_info: TableWarningModelInfo;
+  rag_context_ids: string[];
+}
+
+export interface TableDiagnosticsUnavailable {
+  diagnostics_unavailable: true;
+  table_name?: string;
+  reason?: string;
+  message?: string;
+}
+
+export type TableDiagnostics = TableWarningDiagnostics | TableDiagnosticsUnavailable;
+export type TableOutputStates = any[] & { diagnostics?: TableDiagnostics };
+
 // ── Upload ────────────────────────────────────────────────────────────────────
 
 export interface UploadP4Result {
@@ -381,8 +448,22 @@ export async function analyzeParser(): Promise<ParserResult> {
 export interface TableResult {
   message: string;
   results_summary: any[];
-  output_states: any[];
+  output_states: TableOutputStates;
   output_file: string; // e.g. 's1_MyIngress_ipv4_lpm_from_parser_states_output.json'
+  diagnostics?: TableDiagnostics;
+}
+
+function attachDiagnosticsToOutputStates<T extends { output_states: TableOutputStates; diagnostics?: TableDiagnostics }>(
+  result: T
+): T {
+  if (result.diagnostics && Array.isArray(result.output_states)) {
+    Object.defineProperty(result.output_states, 'diagnostics', {
+      value: result.diagnostics,
+      enumerable: false,
+      configurable: true,
+    });
+  }
+  return result;
 }
 
 export async function analyzeTable(
@@ -390,17 +471,19 @@ export async function analyzeTable(
   switch_id: string,
   input_states: string
 ): Promise<TableResult> {
-  return apiFetch<TableResult>('/analyze/table', {
+  const result = await apiFetch<TableResult>('/analyze/table', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ table_name, switch_id, input_states }),
   });
+  return attachDiagnosticsToOutputStates(result);
 }
 
 export interface EgressTableResult {
   message: string;
-  output_states: any[];
+  output_states: TableOutputStates;
   output_file: string;
+  diagnostics?: TableDiagnostics;
 }
 
 export async function analyzeEgressTable(
@@ -408,11 +491,12 @@ export async function analyzeEgressTable(
   switch_id: string,
   input_states: string
 ): Promise<EgressTableResult> {
-  return apiFetch<EgressTableResult>('/analyze/egress_table', {
+  const result = await apiFetch<EgressTableResult>('/analyze/egress_table', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ table_name, switch_id, input_states }),
   });
+  return attachDiagnosticsToOutputStates(result);
 }
 
 export interface DeparserResult {

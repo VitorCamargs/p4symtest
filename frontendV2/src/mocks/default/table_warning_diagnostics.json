@@ -1,0 +1,44 @@
+{
+  "diagnostics_version": "2026-04-llm-warning-v1",
+  "table_name": "MyIngress.ipv4_lpm",
+  "expected_behavior": "The table appears to implement IPv4 forwarding based on destination address.",
+  "observed_behavior": "All analyzed states remain on a drop path after table execution.",
+  "inconclusive": true,
+  "warnings": [
+    {
+      "type": "unexpected_drop",
+      "severity": "high",
+      "confidence": 0.82,
+      "source": "llm_hypothesis",
+      "evidence_ids": ["fact-drop-001", "fact-update-001", "rag-v1model-001"],
+      "explanation": "The table name, key, and action suggest forwarding, but the observed output keeps all states dropped.",
+      "suggested_action": "Check runtime entries for hdr.ipv4.dstAddr and verify that action parameters map to valid topology ports."
+    }
+  ],
+  "evidence": [
+    {
+      "id": "fact-drop-001",
+      "source": "symbolic_fact",
+      "summary": "All output states satisfy egress_spec == DROP.",
+      "location": "state_summary.drop_states"
+    },
+    {
+      "id": "fact-update-001",
+      "source": "p4_slice",
+      "summary": "The forwarding action writes standard_metadata.egress_spec.",
+      "location": "p4_slice.action_sources[0]"
+    },
+    {
+      "id": "rag-v1model-001",
+      "source": "rag_chunk",
+      "summary": "v1model-style pipelines use egress_spec for output port selection.",
+      "location": "p4-v1model-egress-spec"
+    }
+  ],
+  "model_info": {
+    "provider": "mock",
+    "model": "mock-diagnostics",
+    "prompt_version": "table-warning-v1"
+  },
+  "rag_context_ids": ["p4-v1model-egress-spec"]
+}

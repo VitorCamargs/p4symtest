@@ -1,0 +1,5 @@
+{
+  "diagnostics_unavailable": true,
+  "table_name": "MyIngress.ipv4_lpm",
+  "reason": "llm-analyzer timeout"
+}
