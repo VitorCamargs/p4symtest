@@ -7,6 +7,13 @@ import os
 import tempfile
 from pathlib import Path
 
+from table_diagnostics import (
+    build_table_analysis_facts,
+    diagnostics_unavailable,
+    request_table_diagnostics,
+    table_diagnostics_enabled,
+)
+
 app = Flask(__name__)
 CORS(app)  # Permite requisições do frontend
 
@@ -67,6 +74,53 @@ def load_json_file(filepath):
     except Exception as e:
         print(f"Warn: Erro inesperado ao carregar JSON {filepath}: {e}")
         return None
+
+def maybe_table_diagnostics(
+    *,
+    pipeline,
+    table_name,
+    switch_id,
+    input_states_file,
+    output_filename,
+    input_states,
+    output_states,
+    stdout,
+    stderr,
+):
+    """Build facts and optionally call llm-analyzer without affecting base output."""
+    if not table_diagnostics_enabled():
+        return None
+
+    fsm_data = load_json_file(WORKSPACE_DIR / 'programa.json') or {}
+    runtime_config = load_json_file(WORKSPACE_DIR / 'runtime_config.json') or {}
+    topology = load_json_file(WORKSPACE_DIR / 'topology.json') or {}
+    p4_source_paths = [
+        P4FILES_DIR / 'programa.p4',
+        WORKSPACE_DIR / 'programa.p4',
+        WORKSPACE_DIR / 'custom_test.p4',
+    ]
+
+    try:
+        facts = build_table_analysis_facts(
+            pipeline=pipeline,
+            table_name=table_name,
+            switch_id=switch_id,
+            input_snapshot_filename=input_states_file,
+            output_snapshot_filename=output_filename,
+            input_states=input_states,
+            output_states=output_states,
+            runtime_config=runtime_config,
+            topology=topology,
+            fsm_data=fsm_data,
+            p4_source_paths=p4_source_paths,
+            stdout=stdout,
+            stderr=stderr,
+        )
+    except Exception as exc:
+        print(f"Warn: falha ao extrair facts de diagnostico: {exc}")
+        return diagnostics_unavailable(table_name, "facts_extraction_error", exc)
+
+    return request_table_diagnostics(facts)
 
 # ============================================
 # ENDPOINTS - UPLOAD DE ARQUIVOS
@@ -355,12 +409,27 @@ def analyze_table():
     output_states = load_json_file(output_path)
     analysis_summary = parse_table_analysis_stdout(result['stdout'])
 
-    return jsonify({
+    response_payload = {
         'message': f'Análise da tabela {table_name} concluída (usando {input_states_file})',
         'results_summary': analysis_summary,
         'output_states': output_states if output_states is not None else [],
         'output_file': output_filename
-    })
+    }
+    diagnostics = maybe_table_diagnostics(
+        pipeline='ingress',
+        table_name=table_name,
+        switch_id=switch_id,
+        input_states_file=input_states_file,
+        output_filename=output_filename,
+        input_states=load_json_file(input_states_path) or [],
+        output_states=response_payload['output_states'],
+        stdout=result.get('stdout', ''),
+        stderr=result.get('stderr', ''),
+    )
+    if diagnostics is not None:
+        response_payload['diagnostics'] = diagnostics
+
+    return jsonify(response_payload)
 
 def parse_table_analysis_stdout(output):
     """Parse do stdout do run_table.py para resumo legível (helper)"""
@@ -491,12 +560,27 @@ def analyze_egress_table():
     # Pode adicionar parsing do stdout se run_table_egress.py gerar resumo
     # summary = parse_table_analysis_stdout(result['stdout'])
 
-    return jsonify({
+    response_payload = {
         'message': f'Análise da tabela Egress {table_name} concluída (usando {input_states_file})',
         # 'results_summary': summary,
         'output_states': output_states,
         'output_file': output_filename
-    })
+    }
+    diagnostics = maybe_table_diagnostics(
+        pipeline='egress',
+        table_name=table_name,
+        switch_id=switch_id,
+        input_states_file=input_states_file,
+        output_filename=output_filename,
+        input_states=load_json_file(input_states_path) or [],
+        output_states=output_states,
+        stdout=result.get('stdout', ''),
+        stderr=result.get('stderr', ''),
+    )
+    if diagnostics is not None:
+        response_payload['diagnostics'] = diagnostics
+
+    return jsonify(response_payload)
 
 # ============================================
 # ENDPOINTS - ANÁLISE DO DEPARSER

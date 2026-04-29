@@ -1,0 +1,13 @@
+[
+  {
+    "description": "ingress output",
+    "z3_constraints_smt2": [
+      "(= ethernet.$valid$ #b1)"
+    ],
+    "present_headers": ["ethernet", "ipv4"],
+    "history": ["Parser", "MyIngress.ipv4_lpm"],
+    "field_updates": {
+      "standard_metadata.egress_spec": "#b000000001"
+    }
+  }
+]

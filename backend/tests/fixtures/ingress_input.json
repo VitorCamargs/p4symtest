@@ -1,0 +1,18 @@
+[
+  {
+    "description": "parser ipv4",
+    "z3_constraints_smt2": [
+      "(= ipv4.$valid$ #b1)"
+    ],
+    "present_headers": ["ethernet", "ipv4"],
+    "history": ["Parser"]
+  },
+  {
+    "description": "parser non-ipv4",
+    "z3_constraints_smt2": [
+      "(= ipv4.$valid$ #b0)"
+    ],
+    "present_headers": ["ethernet"],
+    "history": ["Parser"]
+  }
+]

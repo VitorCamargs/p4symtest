@@ -1,0 +1,47 @@
+{
+  "s1": {
+    "MyIngress.ipv4_lpm": [
+      {
+        "match": {
+          "hdr.ipv4.dstAddr": ["10.0.1.10", 32]
+        },
+        "action": "MyIngress.ipv4_forward",
+        "action_params": {
+          "dstAddr": "00:00:00:00:01:00",
+          "port": "1"
+        }
+      }
+    ],
+    "MyEgress.egress_port_smac": [
+      {
+        "match": {
+          "standard_metadata.egress_port": "1"
+        },
+        "action": "MyEgress.rewrite_src_mac",
+        "action_params": {
+          "smac": "00:aa:bb:cc:dd:01"
+        }
+      }
+    ],
+    "Other.table": [
+      {
+        "match": {},
+        "action": "NoAction",
+        "action_params": {}
+      }
+    ]
+  },
+  "s2": {
+    "MyIngress.ipv4_lpm": [
+      {
+        "match": {
+          "hdr.ipv4.dstAddr": ["10.0.2.10", 32]
+        },
+        "action": "MyIngress.ipv4_forward",
+        "action_params": {
+          "port": "2"
+        }
+      }
+    ]
+  }
+}

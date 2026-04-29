@@ -1,0 +1,14 @@
+[
+  {
+    "description": "ingress output -> MyEgress.egress_port_smac",
+    "z3_constraints_smt2": [
+      "(= ethernet.$valid$ #b1)"
+    ],
+    "present_headers": ["ethernet", "ipv4"],
+    "history": ["Parser", "MyIngress.ipv4_lpm", "MyEgress.egress_port_smac"],
+    "field_updates": {
+      "standard_metadata.egress_spec": "#b000000001",
+      "ethernet.srcAddr": "#x00aabbccdd01"
+    }
+  }
+]

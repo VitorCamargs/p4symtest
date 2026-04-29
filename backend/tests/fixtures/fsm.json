@@ -1,0 +1,95 @@
+{
+  "actions": [
+    {
+      "name": "MyIngress.ipv4_forward",
+      "source_info": {
+        "line": 2,
+        "source_fragment": "ipv4_forward"
+      },
+      "primitives": [
+        {
+          "op": "assign",
+          "source_info": {
+            "source_fragment": "standard_metadata.egress_spec = port"
+          }
+        }
+      ]
+    },
+    {
+      "name": "MyIngress.drop",
+      "source_info": {
+        "line": 7,
+        "source_fragment": "drop"
+      },
+      "primitives": [
+        {
+          "op": "mark_to_drop",
+          "source_info": {
+            "source_fragment": "mark_to_drop(standard_metadata)"
+          }
+        }
+      ]
+    },
+    {
+      "name": "MyEgress.rewrite_src_mac",
+      "source_info": {
+        "line": 17,
+        "source_fragment": "rewrite_src_mac"
+      },
+      "primitives": [
+        {
+          "op": "assign",
+          "source_info": {
+            "source_fragment": "hdr.ethernet.srcAddr = smac"
+          }
+        }
+      ]
+    },
+    {
+      "name": "NoAction",
+      "primitives": []
+    }
+  ],
+  "pipelines": [
+    {
+      "name": "ingress",
+      "tables": [
+        {
+          "name": "MyIngress.ipv4_lpm",
+          "source_info": {
+            "line": 9,
+            "source_fragment": "ipv4_lpm"
+          },
+          "actions": ["MyIngress.ipv4_forward", "MyIngress.drop", "NoAction"],
+          "key": [
+            {
+              "name": "hdr.ipv4.dstAddr",
+              "target": ["ipv4", "dstAddr"],
+              "match_type": "lpm"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "egress",
+      "tables": [
+        {
+          "name": "MyEgress.egress_port_smac",
+          "source_info": {
+            "line": 22,
+            "source_fragment": "egress_port_smac"
+          },
+          "actions": ["MyEgress.rewrite_src_mac", "NoAction"],
+          "key": [
+            {
+              "name": "standard_metadata.egress_port",
+              "target": ["standard_metadata", "egress_port"],
+              "match_type": "exact"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
